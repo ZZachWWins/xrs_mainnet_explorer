@@ -47,7 +47,9 @@ MemoryAccounting=yes
 MemoryHigh=384M
 MemoryMax=512M
 MemorySwapMax=0
-CPUQuota=50%
+# One of the two NYC cores at most. Keep full verification inside the unchanged
+# 120-second anchor window; CPUWeight/Nice still favor the blockchain node.
+CPUQuota=100%
 CPUWeight=10
 IOWeight=10
 Nice=10
