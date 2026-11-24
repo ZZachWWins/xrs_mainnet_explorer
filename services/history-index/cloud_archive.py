@@ -45,6 +45,10 @@ class CursorError(ValueError):
         super().__init__('Archive page expired; restart pagination.' if status == 410 else 'Invalid pagination cursor.')
 
 
+class GenerationChanged(ValueError):
+    """A healthy publication superseded this request's read snapshot."""
+
+
 def require(value, message):
     if not value:
         raise ValueError(message)
@@ -108,6 +112,7 @@ class CloudArchive:
         self.index_path = index_path
         self.fetch_live, self.clock = fetch_live, clock
         self.lock = threading.RLock()
+        self.state_lock = threading.Lock()
         self.failed = True
         self.epoch = 0
 
@@ -276,12 +281,15 @@ class CloudArchive:
         with self.lock:
             try:
                 result = self._refresh()
-                self.epoch += 1
-                return result
             except BaseException:
-                self.failed = True
-                self.epoch += 1
+                with self.state_lock:
+                    self.failed = True
+                    self.epoch += 1
                 raise
+            with self.state_lock:
+                self.failed = False
+                self.epoch += 1
+            return result
 
     def _refresh(self):
         """One bounded transactional derived-index refresh; no L1 writes."""
@@ -368,16 +376,27 @@ class CloudArchive:
                         # Compute chain-wide coverage once per background refresh,
                         # not once per public HTTP request.
                         index.setmeta('cloud_coverage', h.canonical(index.coverage()))
-                    self.failed = False
                     return generation
             finally:
                 index.close()
 
     def checkpoint(self):
+        # A healthy background publication can supersede a native read. Retry
+        # once with a fresh SQLite snapshot; repeated publication only fails
+        # this request and does not invalidate the latest verified generation.
+        for attempt in range(2):
+            try:
+                return self._checkpoint()
+            except GenerationChanged:
+                if attempt == 1:
+                    raise
+
+    def _checkpoint(self):
         # Queries use their own coherent read snapshot while the writer verifies
         # the next generation. No HTTP request waits on a ledger scan.
-        require(not self.failed, 'archive refresh unavailable')
-        epoch = self.epoch
+        with self.state_lock:
+            require(not self.failed, 'archive refresh unavailable')
+            epoch = self.epoch
         index = self.read_index()
         try:
             generation = parse(index.meta('cloud_generation') or 'null')
@@ -393,16 +412,26 @@ class CloudArchive:
                 live = self.match_live(index)
                 self.source_matches(stream, tuple(generation['source_identity']), generation['source_bytes'])
             now = self.now()
-            require(not self.failed and self.epoch == epoch
-                    and 0 <= now * 1000 - generation['verified_at_ms'] <= MAX_ANCHOR_AGE * 1000,
-                    'archive evidence changed during native verification')
-            return {'success': True, 'data': checkpoint['data'], 'attestation': {
-                'chain_id': h.CHAIN, 'generation': generation['id'], 'anchor_slot': live['slot'],
-                'anchor_hash': live['hash'], 'observed_at_ms': int(now * 1000),
-                'prefix_verified_at_ms': generation['verified_at_ms']}}
-        except BaseException:
-            self.failed = True
-            self.epoch += 1
+            with self.state_lock:
+                require(not self.failed, 'archive refresh unavailable')
+                if self.epoch != epoch:
+                    raise GenerationChanged('archive generation changed during native verification')
+                require(0 <= now * 1000 - generation['verified_at_ms'] <= MAX_ANCHOR_AGE * 1000,
+                        'archive generation stale')
+                return {'success': True, 'data': checkpoint['data'], 'attestation': {
+                    'chain_id': h.CHAIN, 'generation': generation['id'], 'anchor_slot': live['slot'],
+                    'anchor_hash': live['hash'], 'observed_at_ms': int(now * 1000),
+                    'prefix_verified_at_ms': generation['verified_at_ms']}}
+        except GenerationChanged:
+            raise
+        except BaseException as error:
+            with self.state_lock:
+                # A new canonical generation can legitimately disagree with an
+                # old read snapshot. It must pass every check on the retry.
+                if isinstance(error, Exception) and not self.failed and self.epoch != epoch:
+                    raise GenerationChanged('archive generation superseded failed read') from None
+                self.failed = True
+                self.epoch += 1
             raise
         finally:
             index.close()
@@ -492,7 +521,6 @@ def serve(archive):
             try:
                 archive.refresh()
             except Exception:
-                archive.failed = True
                 print('Archive refresh unavailable; existing history retained as stale.', flush=True)
             time.sleep(REFRESH_SECONDS)
     threading.Thread(target=worker, daemon=True).start()

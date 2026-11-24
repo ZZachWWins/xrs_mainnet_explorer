@@ -10,7 +10,8 @@
   "files": {
     "assets/explorer-ui.css": "8b0584ef629031c6d226e5a064967b9da8f82045ed72baabdae933a8e35b8f47",
     "assets/explorer-ui.js": "f3b6133c27c864e31bd07669ba00d5c7731b4430cf7044c56c81e0da53482987",
-    "bootstrap.mjs": "db35c1e3ba1d89ef282fa4acb5cff5cc12b38909bfc0c079f9b4654ee257962b",
+    "bootstrap.mjs": "77722bf99a023d4ca28571992fdedead8c0bbe5c39b186a8ab6f0be158633ca8",
+    "connection-recovery.mjs": "bee8b429f2565ee624ddb2fb067ad0feaebf14e6f2395d910ae97d3827a5fa7b",
     "explorer-api.mjs": "d697d647ed6eba3551591151927b7343f2c30979de0ed0d66194d2a7861dfe55",
     "explorer.css": "d15725b02011ac25bc38eb72e9f60b10dfa929597b625d208a4a6cc01adade6c",
     "favicon.ico": "d951f8a121c9f65f89fbc992e259559d67862fc6c765e266d9ac26729c442e7d",

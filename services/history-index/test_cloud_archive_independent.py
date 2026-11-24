@@ -401,6 +401,104 @@ class IndependentCloudArchiveTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.service.checkpoint()
 
+    def test_checkpoint_retries_successful_background_publication_without_poisoning(self):
+        before = self.start()['attestation']['generation']
+        self.records.extend(blocks([9], self.records[-1]['hash']))
+        with self.ledger.open('ab') as stream:
+            stream.write(serialized(self.records[-1:]))
+        self.clock += 1
+        live, errors = self.fetch(), []
+        def publish_success():
+            self.live_override = None
+            def refresh():
+                try:
+                    self.service.refresh()
+                except BaseException as error:
+                    errors.append(error)
+            writer = threading.Thread(target=refresh)
+            writer.start()
+            writer.join(3)
+            self.assertFalse(writer.is_alive(), 'publication waited for checkpoint reader')
+            self.assertEqual(errors, [])
+            return live
+        self.live_override = publish_success
+        result = self.service.checkpoint()
+        self.assertTrue(result['success'])
+        self.assertNotEqual(result['attestation']['generation'], before)
+        self.assertEqual(result['attestation']['generation'], self.service.historical('coverage')['generation'])
+        self.assertEqual(result['attestation']['prefix_verified_at_ms'], 2_001_000)
+        self.assertFalse(self.service.failed)
+        self.assertEqual(self.service.dispatch('/health')[0], 200)
+
+    def test_two_healthy_publications_bound_retry_without_global_failure(self):
+        self.start()
+        publications = []
+        def publish_again():
+            self.live_override = None
+            live = self.fetch()
+            self.clock += 1
+            publications.append(self.service.refresh())
+            self.live_override = publish_again
+            return live
+        self.live_override = publish_again
+        with self.assertRaises(cloud.GenerationChanged):
+            self.service.checkpoint()
+        self.assertEqual(len(publications), 2)
+        self.assertFalse(self.service.failed)
+        self.assertEqual(self.service.dispatch('/health')[0], 200)
+        self.live_override = None
+        self.assertTrue(self.service.checkpoint()['success'])
+
+    def test_failed_refresh_during_checkpoint_still_invalidates_global_gate(self):
+        self.start()
+        live, invalid = self.fetch(), self.fetch()
+        invalid['data'][1]['hash'] = 'f' * 64
+        def publish_failure():
+            self.live_override = invalid
+            with self.assertRaises(ValueError):
+                self.service.refresh()
+            self.live_override = None
+            return live
+        self.live_override = publish_failure
+        with self.assertRaises(ValueError):
+            self.service.checkpoint()
+        self.assertTrue(self.service.failed)
+        self.assertEqual(self.service.dispatch('/health')[0], 503)
+
+    def test_checkpoint_retries_old_snapshot_mismatch_after_valid_shallow_reorg(self):
+        before = self.start()['attestation']['generation']
+        def publish_reorg():
+            self.live_override = None
+            self.records = self.records[:5] + blocks(range(6, 10), self.records[4]['hash'], branch=9)
+            self.ledger.write_bytes(serialized(self.records))
+            self.clock += 1
+            self.service.refresh()
+            return self.fetch()
+        self.live_override = publish_reorg
+        result = self.service.checkpoint()
+        self.assertTrue(result['success'])
+        self.assertNotEqual(result['attestation']['generation'], before)
+        self.assertEqual(result['attestation']['anchor_hash'], bytes(self.records[-2]['hash']).hex())
+        self.assertEqual(self.index_tip()[0], 9)
+        self.assertFalse(self.service.failed)
+
+    def test_new_generation_retry_still_rejects_wrong_hash(self):
+        self.start()
+        invalid = self.fetch()
+        invalid['data'][1]['hash'] = 'f' * 64
+        def publish_then_return_wrong_hash():
+            self.live_override = None
+            self.clock += 1
+            self.service.refresh()
+            self.live_override = invalid
+            return invalid
+        self.live_override = publish_then_return_wrong_hash
+        with self.assertRaises(ValueError) as caught:
+            self.service.checkpoint()
+        self.assertNotIsInstance(caught.exception, cloud.GenerationChanged)
+        self.assertTrue(self.service.failed)
+        self.assertEqual(self.service.dispatch('/health')[0], 503)
+
     def test_history_reader_does_not_wait_for_refresh_lock(self):
         self.start()
         entered, release, result = threading.Event(), threading.Event(), []

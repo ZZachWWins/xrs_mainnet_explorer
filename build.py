@@ -24,7 +24,7 @@ def build():
     shutil.copytree(VENDOR / 'logos', DIST / 'logos', dirs_exist_ok=True)
     shutil.copyfile(VENDOR / 'favicon.ico', DIST / 'favicon.ico')
     shutil.copyfile(VENDOR / 'assets/index-bamvo4ap.css', DIST / 'assets/explorer-ui.css')
-    for filename in ('network.mjs', 'explorer-api.mjs', 'bootstrap.mjs', 'explorer.css', 'view-loaders.mjs', 'navigation.mjs', 'history-client.mjs', 'history-views.mjs'):
+    for filename in ('network.mjs', 'explorer-api.mjs', 'bootstrap.mjs', 'explorer.css', 'view-loaders.mjs', 'navigation.mjs', 'history-client.mjs', 'history-views.mjs', 'connection-recovery.mjs'):
         shutil.copyfile(ROOT / 'src' / filename, DIST / filename)
     original = (VENDOR / 'assets/index-xu2oldtt.js').read_text()
     start, end = original.index(',vc=new Map;'), original.index('function hs(e)')

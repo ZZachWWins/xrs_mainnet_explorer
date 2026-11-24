@@ -4,6 +4,7 @@ import * as views from './view-loaders.mjs';
 import {createNavigation} from './navigation.mjs';
 import {createHistoryClient} from './history-client.mjs';
 import {createHistoryViews} from './history-views.mjs';
+import {createConnectionRecovery} from './connection-recovery.mjs';
 
 const status = document.getElementById('network-status');
 const notice = document.getElementById('data-notice');
@@ -93,25 +94,54 @@ if (network) {
     }
   };
   new MutationObserver(rewriteLinks).observe(document.getElementById('root'), {childList: true, subtree: true, attributes: true, attributeFilter: ['href']});
-  try {
-    await api.ready();
+  let connectionButton, connectionMessage, connectionPanel;
+  const recovery = createConnectionRecovery({
+    connect: () => api.ready(),
+    onConnecting() {
+      if (connectionPanel) {
+        status.textContent = `${NETWORKS[network].name} · Reconnecting…`;
+        connectionButton.disabled = true;
+        connectionButton.textContent = 'Retrying connection…';
+        connectionMessage.textContent = 'Reconnecting automatically. This may take a moment…';
+      }
+    },
+    async onConnected() {
     status.textContent = `${NETWORKS[network].name} · Connected`;
+    startup.hidden = false;
+    root.setAttribute('aria-busy', 'true');
     const viewName = location.pathname === '/' ? 'blocks' : location.pathname.split('/')[1].replaceAll('-', ' ');
     document.getElementById('loading-title').textContent = `Loading ${viewName}…`;
     document.getElementById('loading-detail').textContent = `Retrieving data from Xeris ${NETWORKS[network].name}.`;
     const mounted = new MutationObserver(() => { if (root.childElementCount) {finishStartup();mounted.disconnect();} });
     mounted.observe(root, {childList: true});
+    root.replaceChildren();
     await import('/assets/explorer-ui.js');
     rewriteLinks();
-  } catch (error) {
+    },
+    onFailure(error, {retryable, serverDelay}) {
     status.textContent = `${NETWORKS[network].name} · Connection unavailable`;
     notice.hidden = true;
     const panel = document.createElement('main'); panel.className = 'connection-panel'; panel.id = 'explorer-content'; panel.tabIndex = -1;
     const heading = document.createElement('h1'); heading.textContent = 'Network data is unavailable';
     const text = document.createElement('p'); text.textContent = error?.code === 'NETWORK_MISMATCH'
       ? 'This endpoint did not match the selected network. Data display has been stopped.'
-      : `We could not connect to Xeris ${NETWORKS[network].name}. Retry the connection when you are ready.`;
-    const button = document.createElement('button'); button.textContent = 'Retry connection'; button.onclick = () => location.reload();
-    panel.append(heading, text, button); root.replaceChildren(panel); finishStartup();
-  }
+      : `We could not connect to Xeris ${NETWORKS[network].name}.`;
+    const hint = document.createElement('p');
+    hint.textContent = 'The network may be experiencing heavy load, or your internet connection may not be optimal.';
+    const message = document.createElement('p'); message.setAttribute('role', 'status'); message.setAttribute('aria-live', 'polite');
+    message.textContent = retryable ? 'We’ll retry automatically. This may take a moment…' : 'Retry the connection when you are ready.';
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Retry connection';
+    button.disabled = retryable && serverDelay > 0;
+    button.onclick = () => { if (retryable) void recovery.retry(); else location.reload(); };
+    panel.append(heading, text);
+    if (retryable) panel.append(hint);
+    panel.append(message, button); connectionPanel = panel; connectionButton = button; connectionMessage = message;
+    root.replaceChildren(panel); finishStartup();
+    }
+  });
+  window.addEventListener('pagehide', () => recovery.stop(), {once: true});
+  // A restored document retains its stopped timers. Re-enter through the full
+  // network identity check rather than reviving stale connection state.
+  window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
+  void recovery.start();
 }
