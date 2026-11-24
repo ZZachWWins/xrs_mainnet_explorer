@@ -18,6 +18,14 @@ export function searchDestination(value, scope = 'auto') {
   return `/${scope}/${encodeURIComponent(scope === 'block' ? String(BigInt(text)) : text)}`;
 }
 
+export function activeSection(pathname) {
+  if (pathname === '/' || /^\/block\/[^/]+$/.test(pathname)) return '/';
+  for (const [section, detail] of [['/transactions', 'tx'], ['/balances', 'account'], ['/tokens', 'token'], ['/contracts', 'contract']]) {
+    if (pathname === section || new RegExp(`^/${detail}/[^/]+$`).test(pathname)) return section;
+  }
+  return ['/pools', '/validators', '/stats'].includes(pathname) ? pathname : null;
+}
+
 export function createNavigation(React, Link, useLocation, useNavigate) {
   const h = React.createElement;
   const links = [['/', 'Overview'], ['/transactions', 'Transactions'], ['/balances', 'Accounts'], ['/tokens', 'Tokens'],
@@ -26,27 +34,44 @@ export function createNavigation(React, Link, useLocation, useNavigate) {
     const location = useLocation(), navigate = useNavigate();
     const [open, setOpen] = React.useState(false), [query, setQuery] = React.useState(''),
       [scope, setScope] = React.useState('auto'), [error, setError] = React.useState('');
-    React.useEffect(() => {setOpen(false);setError('');}, [location.pathname]);
+    const menuButton = React.useRef(null), keyboardNavigation = React.useRef(false);
+    const section = activeSection(location.pathname);
+    React.useEffect(() => {
+      setOpen(false);setError('');
+      if (keyboardNavigation.current) {
+        keyboardNavigation.current = false;
+        document.getElementById('explorer-content')?.focus({preventScroll:true});
+      }
+    }, [location.pathname]);
+    function markNavigation(event, to) {
+      keyboardNavigation.current = !event.defaultPrevented && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+        && event.button === 0 && event.detail === 0 && location.pathname !== to;
+    }
+    function closeMenu(event) {
+      if (event.key !== 'Escape' || !open) return;
+      event.preventDefault();setOpen(false);menuButton.current?.focus();
+    }
     function submit(event) {
       event.preventDefault();
       try {navigate(searchDestination(query, scope));setError('');setQuery('');setOpen(false);}
       catch (failure) {setError(failure.message);}
     }
-    return h('header', {className:'explorer-header'},
+    return h('header', {className:'explorer-header',onKeyDown:closeMenu},
       h('div', {className:'explorer-header-main'},
-        h(Link, {to:'/',className:'explorer-wordmark','aria-label':'Xeris Explorer overview'},
+        h(Link, {to:'/',className:'explorer-wordmark','aria-label':'Xeris Explorer overview',onClick:event=>markNavigation(event,'/')},
           h('img',{src:'/logos/logodark.png',alt:'',width:32,height:32}),
           h('span',null,'XERIS ',h('span',null,'EXPLORER'))),
-        h('button',{className:'explorer-menu',type:'button','aria-controls':'explorer-navigation','aria-expanded':open,
+        h('button',{className:'explorer-menu',type:'button',ref:menuButton,'aria-controls':'explorer-navigation','aria-expanded':open,
           onClick:()=>setOpen(!open)},open?'Close menu':'Menu'),
         h('form',{className:'explorer-search',onSubmit:submit,role:'search'},
-          h('select',{'aria-label':'Search type',value:scope,onChange:event=>setScope(event.target.value)},
+          h('select',{'aria-label':'Search type',value:scope,onChange:event=>{setScope(event.target.value);setError('');}},
             ...[['auto','All'],['block','Block'],['account','Account'],['tx','Transaction'],['token','Token'],['contract','Contract']].map(([value,label])=>h('option',{key:value,value},label))),
-          h('input',{'aria-label':'Search the selected network',placeholder:'Search by slot, address or token ID',value:query,maxLength:128,
-            onChange:event=>setQuery(event.target.value),'aria-describedby':error?'explorer-search-error':undefined,autoComplete:'off',spellCheck:false}),
+          h('input',{type:'search','aria-label':'Search the selected network',placeholder:'Search by slot, address or token ID',value:query,maxLength:128,
+            onChange:event=>{setQuery(event.target.value);setError('');},'aria-invalid':Boolean(error),'aria-describedby':error?'explorer-search-error':undefined,autoComplete:'off',spellCheck:false}),
           h('button',{type:'submit','aria-label':'Search'},'Search'))),
       error&&h('p',{id:'explorer-search-error',className:'explorer-search-error',role:'alert'},error),
       h('nav',{id:'explorer-navigation',className:`explorer-navigation${open?' is-open':''}`,'aria-label':'Explorer sections'},
-        ...links.map(([to,label])=>h(Link,{key:to,to,'aria-current':location.pathname===to?'page':undefined},label))));
+        ...links.map(([to,label])=>h(Link,{key:to,to,onClick:event=>markNavigation(event,to),
+          'aria-current':location.pathname===to?'page':section===to?'location':undefined},label))));
   };
 }

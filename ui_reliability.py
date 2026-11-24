@@ -159,7 +159,18 @@ def repair_views(code):
 
     fallback = 'a.jsx(Ce,{path:"*",element:a.jsxs("main",{className:"connection-panel",children:[a.jsx("h1",{children:"Page not found"}),a.jsx("p",{children:"This explorer link is unavailable. Check the address or return to the overview."}),a.jsx(A,{to:"/",children:"Back to overview"})]})})'
     code = one(code, 'a.jsx(Ce,{path:"/validators",element:a.jsx(mv,{})})]})', 'a.jsx(Ce,{path:"/validators",element:a.jsx(mv,{})}),' + fallback + ']})', 'unknown-route recovery')
+    # Keep the skip/focus destination after Navigation, including routes whose
+    # initial loading output is a div rather than a main landmark.
+    layout_start = code.index('function hv(){')
+    layout_end = code.index('Gs.createRoot(', layout_start)
+    layout = code[layout_start:layout_end]
+    layout = one(layout, 'children:[a.jsx(ev,{}),a.jsxs(Wh,{children:[',
+        'children:[a.jsx(ev,{}),a.jsx("section",{id:"explorer-content",tabIndex:-1,"aria-label":"Explorer content",children:a.jsxs(Wh,{children:[',
+        'stable route content after navigation')
+    layout = one(layout, ']})]})})}', ']})})]})})}', 'stable route content close')
+    code = code[:layout_start] + layout + code[layout_end:]
     boundary = 'class XerisExplorerBoundary extends v.Component{constructor(props){super(props);this.state={failed:false}}static getDerivedStateFromError(){return{failed:true}}render(){return this.state.failed?a.jsxs("main",{className:"connection-panel",role:"alert",children:[a.jsx("h1",{children:"This view could not be displayed"}),a.jsx("p",{children:"Please retry the page or return to the overview. No other network was selected."}),a.jsx("button",{type:"button",onClick:()=>location.reload(),children:"Retry page"}),a.jsx("a",{href:"/?network="+window.XerisExplorerAPI.network,children:"Back to overview"})]}):this.props.children}}'
+    boundary = boundary.replace('className:"connection-panel",role:"alert"', 'id:"explorer-content",tabIndex:-1,className:"connection-panel",role:"alert"')
     mount = 'Gs.createRoot(document.getElementById("root")).render(a.jsx(Fc.StrictMode,{children:a.jsx(hv,{})}));'
     code = one(code, mount, boundary + 'Gs.createRoot(document.getElementById("root")).render(a.jsx(Fc.StrictMode,{children:a.jsx(XerisExplorerBoundary,{children:a.jsx(hv,{})})}));', 'render failure recovery boundary')
     return code, asserted

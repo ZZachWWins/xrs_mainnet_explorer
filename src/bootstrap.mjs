@@ -7,7 +7,16 @@ const status = document.getElementById('network-status');
 const notice = document.getElementById('data-notice');
 const startup = document.getElementById('startup-loader');
 const root = document.getElementById('root');
-const finishStartup = () => { startup.hidden = true; root.setAttribute('aria-busy', 'false'); };
+const skipLink = document.getElementById('skip-to-content');
+const finishStartup = () => {
+  const restoreFocus = document.activeElement === startup;
+  startup.hidden = true; root.setAttribute('aria-busy', 'false');
+  const content = document.getElementById('explorer-content');
+  if (content) {
+    skipLink.href = '#explorer-content';
+    if (restoreFocus) content.focus({preventScroll:true});
+  }
+};
 let retryTimer;
 const selector = document.getElementById('network-selector');
 const choices = [...selector.querySelectorAll('button[data-network]')];
@@ -18,7 +27,11 @@ for (const button of choices) button.addEventListener('click', () => {
 });
 let network;
 try { network = selectedNetwork(location.href); }
-catch { finishStartup(); status.textContent = 'Choose a valid network to continue.'; root.textContent = 'This link specifies an unknown network.'; }
+catch {
+  status.textContent = 'Choose a valid network to continue.';
+  const panel = document.createElement('main'); panel.id = 'explorer-content'; panel.tabIndex = -1; panel.className = 'connection-panel';
+  panel.textContent = 'This link specifies an unknown network.'; root.replaceChildren(panel); finishStartup();
+}
 
 if (network) {
   for (const button of choices) button.setAttribute('aria-pressed', String(button.dataset.network === network));
@@ -87,15 +100,14 @@ if (network) {
     await import('/assets/explorer-ui.js');
     rewriteLinks();
   } catch (error) {
-    finishStartup();
     status.textContent = `${NETWORKS[network].name} · Connection unavailable`;
     notice.hidden = true;
-    const panel = document.createElement('main'); panel.className = 'connection-panel';
+    const panel = document.createElement('main'); panel.className = 'connection-panel'; panel.id = 'explorer-content'; panel.tabIndex = -1;
     const heading = document.createElement('h1'); heading.textContent = 'Network data is unavailable';
     const text = document.createElement('p'); text.textContent = error?.code === 'NETWORK_MISMATCH'
       ? 'This endpoint did not match the selected network. Data display has been stopped.'
       : `We could not connect to Xeris ${NETWORKS[network].name}. Retry the connection when you are ready.`;
     const button = document.createElement('button'); button.textContent = 'Retry connection'; button.onclick = () => location.reload();
-    panel.append(heading, text, button); document.getElementById('root').append(panel);
+    panel.append(heading, text, button); root.replaceChildren(panel); finishStartup();
   }
 }
