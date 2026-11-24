@@ -21,10 +21,12 @@ export function createHistoryViews(React,Link,useLocation,client) {
   const short=value=>typeof value==='string'&&value.length>24?value.slice(0,12)+'…'+value.slice(-10):String(value??'Unavailable');
   const link=(to,text)=>h(Link,{to},text);
   const timestamp=value=>typeof value==='number'&&Number.isFinite(new Date(value).getTime())?new Date(value).toISOString():'Unavailable';
+  const age=value=>value==null?'Age unavailable':value<60_000?'Less than a minute old':value<3_600_000?`${Math.floor(value/60_000)} minutes old`:value<86_400_000?`${Math.floor(value/3_600_000)} hours old`:`${Math.floor(value/86_400_000)} days old`;
   const coverage=value=>value?h('aside',{className:'history-coverage'},
     h('strong',null,`Indexed blocks ${value.indexed_from.toLocaleString()}–${value.tip.slot.toLocaleString()}`),
     h('span',null,`${value.counts.blocks.toLocaleString()} blocks · ${value.counts.transactions.toLocaleString()} transactions · ${value.gaps.length} reported gaps`),
-    h('p',null,'This is a captured Mainnet archive. Newer live activity may not yet appear.'),
+    h('p',null,value.source==='cloud'?'Source: cloud archive.':value.source==='blobs'?`Source: verified stored snapshot. ${age(value.snapshot_age_ms)}.`:'This is a captured Mainnet archive.'),
+    value.stale&&h('p',{role:'status'},'Archive updates are delayed. Newer activity may not yet appear.'),
     value.gaps.length>0&&h('details',null,h('summary',null,'Coverage gaps'),h('pre',null,JSON.stringify(value.gaps,null,2)))):null;
   const details=(label,value)=>h('div',{className:'history-detail'},h('dt',null,label),h('dd',null,value));
   function transactionTable(rows) {
@@ -89,6 +91,7 @@ export function createHistoryViews(React,Link,useLocation,client) {
       h('nav',{'aria-label':'Historical views',className:'history-tabs'},link('/history/blocks','Blocks'),link('/history/transactions','Transactions'),livePath&&link(livePath+'?source=live','Live record')),
       kind==='address'&&h('p',{className:'history-identifier'},id),
       coverage(response?.coverage||state.error?.coverage),
+      isList&&response?.snapshot_tip&&h('p',null,`These pages use the archive snapshot through block ${response.snapshot_tip.slot.toLocaleString()}.`),
       state.status==='loading'?h('div',{className:'view-loading',role:'status','aria-live':'polite'},
         h('span',{className:'loading-circle','aria-hidden':'true'}),h('span',null,`Loading ${titles[kind].toLowerCase()}… Checking archive coverage.`)):
       state.status==='unavailable'?h('section',{role:'status'},h('h2',null,'Historical archive unavailable'),h('p',null,'The archive has not been published or cannot be reached. Recent explorer views remain available.'),link('/','Open live overview')):

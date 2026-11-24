@@ -1,0 +1,56 @@
+[Unit]
+Description=Xeris public canonical history archive (read-only node source)
+After=network-online.target xeris-mainnet-v4.service
+Wants=network-online.target
+RequiresMountsFor=/var/lib/xeris/mainnet-v4 /var/lib/xeris-explorer-history
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=xeris-archive
+Group=xeris-archive
+WorkingDirectory=/opt/xeris/history-index
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/xeris/history-index/cloud_archive.py --index /var/lib/xeris-explorer-history/index.sqlite3
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+LimitCORE=0
+LimitNOFILE=128
+TasksMax=16
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadOnlyPaths=/var/lib/xeris/mainnet-v4 /etc/xeris
+ReadWritePaths=/var/lib/xeris-explorer-history
+# Use the directory mount, so atomic canonical ledger replacements remain visible.
+# A separate UID gets search-only source-directory ACL and read ACL only on the
+# public ledger and ruleset. No default ACL: private producer files stay unreadable.
+# Missing mandatory key paths fail unit setup rather than weaken it.
+InaccessiblePaths=/var/lib/xeris/mainnet-v4/producer-ed25519.json /var/lib/xeris/mainnet-v4/dilithium3_sk.bin /var/lib/xeris/mainnet-v4/dilithium3_pk.bin /proc
+RestrictAddressFamilies=AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallFilter=~@mount @privileged @reboot @swap ptrace process_vm_readv process_vm_writev kill tkill tgkill pidfd_send_signal
+MemoryAccounting=yes
+MemoryHigh=384M
+MemoryMax=512M
+MemorySwapMax=0
+CPUQuota=50%
+CPUWeight=10
+IOWeight=10
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

@@ -13,13 +13,13 @@ const response=(data,status=200,network='mainnet')=>new Response(JSON.stringify(
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 
 test('unpublished manifest produces honest 503 and fixed Mainnet identity without writes',async()=>{
-  let reads=0;const handle=createHistoryFunction({adapter:{async readCurrent(){reads++;return null;},async readGeneration(){throw Error('unexpected');},async readJSON(){throw Error('unexpected');}}});
+  let reads=0;const handle=createHistoryFunction({fetchImpl:async()=>{throw Error('offline fixture');},adapter:{async readCurrent(){reads++;return null;},async readGeneration(){throw Error('unexpected');},async readJSON(){throw Error('unexpected');}}});
   const result=await handle(new Request('https://example.test/api/history/coverage'));assert.equal(result.status,503);assert.equal(result.headers.get('x-xeris-network'),'mainnet');
   const data=await result.json();assert.equal(data.coverage,null);assert.equal(data.generation,null);assert.equal(reads,1);
   const alias=await handle(new Request('https://example.test/.netlify/functions/history/coverage'));assert.equal(alias.status,503);
 });
 test('Function refuses network overrides and writes before accessing storage',async()=>{
-  let calls=0;const handle=createHistoryFunction({adapter:{async readCurrent(){calls++;},async readGeneration(){calls++;},async readJSON(){calls++;}}});
+  let calls=0;const handle=createHistoryFunction({fetchImpl:async()=>{throw Error('offline fixture');},adapter:{async readCurrent(){calls++;},async readGeneration(){calls++;},async readJSON(){calls++;}}});
   assert.equal((await handle(new Request('https://example.test/api/history/coverage?network=testnet'))).status,400);
   assert.equal((await handle(new Request('https://example.test/api/history/coverage',{method:'POST'}))).status,405);
   assert.equal((await handle(new Request('https://example.test/networks/testnet/history'))).status,404);assert.equal(calls,0);
@@ -34,7 +34,7 @@ test('ready archive requires matching chain, layout, nonempty bounded coverage a
     const client=createHistoryClient('mainnet',{fetchImpl:async()=>response(data,200,network)});assert.equal((await client.readiness()).ready,false);
   }
   const requests=[];const client=createHistoryClient('mainnet',{fetchImpl:async(path,options)=>{requests.push({path,options});return response(body(coverage));}});
-  assert.equal((await client.readiness()).ready,true);assert.equal(requests[0].path,'/api/history/coverage');assert.equal(requests[0].options.redirect,'error');assert.equal(requests[0].options.credentials,'omit');
+  assert.equal((await client.readiness()).ready,true);assert.equal(requests[0].path,'/.netlify/functions/history/coverage');assert.equal(requests[0].options.redirect,'error');assert.equal(requests[0].options.credentials,'omit');
 });
 test('archive unavailable signals explicit recent-view fallback without requesting archive rows',async()=>{
   const events=[];let rows=0;loadHistoryRoute({readiness:async()=>({ready:false,reason:'UNAVAILABLE'}),page:async()=>{rows++;}}, {kind:'transactions'},value=>events.push(value));
@@ -44,7 +44,7 @@ test('old transaction absent from activated archive stays not-indexed, never sil
   const paths=[];const signature='3XjqbLivVquemCZEiKfbYbcxku9a12NMbyNpbFsSFjT4Am4FTfrttjyRPE1KB6xaQK4SDxGV2VvBccyxMMhhkn36';
   const client=createHistoryClient('mainnet',{fetchImpl:async path=>{paths.push(path);return path.endsWith('/coverage')?response(body(coverage)):response({...body(null),error:{code:'not_indexed'}},404);}});
   const events=[];loadHistoryRoute(client,{kind:'transaction',id:signature},value=>events.push(value));
-  await tick();await tick();assert.equal(events[0].status,'error');assert.equal(events[0].error.code,'NOT_INDEXED');assert.equal(events[0].error.coverage.indexed_from,1);assert.equal(paths.length,2);assert.ok(paths.every(p=>p.startsWith('/api/history/')));
+  await tick();await tick();assert.equal(events[0].status,'error');assert.equal(events[0].error.code,'NOT_INDEXED');assert.equal(events[0].error.coverage.indexed_from,1);assert.equal(paths.length,2);assert.ok(paths.every(p=>p.startsWith('/.netlify/functions/history/')));
 });
 test('stale route responses cannot replace a newer page',async()=>{
   let finish;const client={readiness:async()=>({ready:true}),record:()=>new Promise(resolve=>{finish=resolve;})};const events=[];
@@ -96,7 +96,7 @@ test('unpublished Mainnet searches resolve built live fallbacks and preserve the
   const shell=Function('a',...names,source.slice(start,end)+';return hv;')({jsx,jsxs:jsx},...names.map(name=>name))();
   const routes=shell.props.children.props.children[1].props.children.props.children;
   let manifestReads=0;
-  const client=createHistoryClient('mainnet',{fetchImpl:async path=>{assert.equal(path,'/api/history/coverage');manifestReads++;return response({error:{code:'unavailable'},coverage:null,generation:null},503);}});
+  const client=createHistoryClient('mainnet',{fetchImpl:async path=>{assert.equal(path,'/.netlify/functions/history/coverage');manifestReads++;return response({error:{code:'unavailable'},coverage:null,generation:null},503);}});
   for(const [input,scope,pattern,fallback] of [['1','block','/block/:slot','sv'],['3'.repeat(88),'tx','/tx/:signature','av']]){
     const path=searchDestination(input,scope,{history:true}),route=routes.find(v=>v.props.path===pattern);
     assert.equal(path.split('/')[1],pattern.split('/')[1]);assert.equal(route.props.element.type,'XerisHistoryRoute');assert.equal(route.props.element.props.Fallback,fallback);
@@ -129,4 +129,9 @@ test('history page cache retains recent pages but evicts older data beyond 20 en
   findNodes(tree,n=>n.type==='button'&&textOf(n)==='Previous')[0].props.onClick();tree=await ready();assert.equal(calls.length,21);
   for(let page=18;page>=0;page--){findNodes(tree,n=>n.type==='button'&&textOf(n)==='Previous')[0].props.onClick();tree=await ready();}
   assert.match(textOf(tree),/Page 1/);assert.equal(calls.length,22);assert.equal(calls.at(-1),null);
+});
+test('history view labels source, stale snapshot age and pagination snapshot separately',async()=>{
+  const client={network:'mainnet',readiness:async()=>({ready:true}),page:async()=>({...body([]),coverage:{...coverage,source:'blobs',stale:true,snapshot_age_ms:7_200_000},snapshot_tip:{slot:47600,hash:'c'.repeat(64)},cursor:null})};
+  const ui=viewHarness(client);ui.render();await tick();await tick();const text=textOf(ui.render());
+  assert.match(text,/Source: verified stored snapshot\. 2 hours old/);assert.match(text,/Archive updates are delayed/);assert.match(text,/snapshot through block 47,600/);assert.match(text,/Indexed blocks 1–47,625/);
 });

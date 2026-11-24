@@ -1,5 +1,7 @@
 import {parsePublicJSON} from './network.mjs';
 const CHAIN = 'xeris-mainnet-v4', HASH = /^[a-f0-9]{64}$/;
+// The direct Function route remains usable when a site's SPA rewrite shadows /api.
+const HISTORY_BASE='/.netlify/functions/history';
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 export class HistoryError extends Error {
   constructor(code, message, {coverage = null, generation = null} = {}) {super(message);this.code=code;this.coverage=coverage;this.generation=generation;}
@@ -11,6 +13,10 @@ export function validateCoverage(body) {
     || !integer(c.counts?.blocks) || c.counts.blocks<1 || !integer(c.counts?.transactions)
     || c.list_page_size!==100 || c.block_shard_size!==1000 || !Array.isArray(c.gaps)) throw new HistoryError('INVALID_ARCHIVE','Historical archive identity or coverage is invalid.');
   if (c.block_shard_size!==1000 || c.gaps.some(g=>!integer(g.from)||!integer(g.to)||g.from<1||g.to<g.from||g.to>c.tip.slot)) throw new HistoryError('INVALID_ARCHIVE','Historical archive coverage is invalid.');
+  if(c.source!==undefined&&(!['cloud','blobs'].includes(c.source)||c.source==='blobs'&&c.stale!==true)
+    ||c.stale!==undefined&&typeof c.stale!=='boolean'
+    ||c.snapshot_age_ms!=null&&!integer(c.snapshot_age_ms)
+    ||c.snapshot_tip_timestamp_ms!=null&&!integer(c.snapshot_tip_timestamp_ms))throw new HistoryError('INVALID_ARCHIVE','Historical archive provenance is invalid.');
   return c;
 }
 function validateRecord(kind,row,coverage) {
@@ -24,11 +30,11 @@ export function createHistoryClient(network,{fetchImpl=fetch,timeoutMs=10_000}={
   if (!['mainnet','testnet'].includes(network)) throw new Error('Unknown network');
   async function read(path) {
     if(network!=='mainnet') throw new HistoryError('DISABLED','Historical archive is available on Mainnet. Testnet remains selected.');
-    if(!/^\/(coverage|blocks|transactions|block\/[^/?]+|transaction\/[^/?]+|address\/[^/?]+)(\?cursor=[A-Za-z0-9_-]+)?$/.test(path)) throw new HistoryError('INVALID_REQUEST','Unsupported history request.');
+    if(!/^\/(coverage|blocks|transactions|block\/[^/?]+|transaction\/[^/?]+|address\/[^/?]+)(\?cursor=[A-Za-z0-9_-]+)?$/.test(path)&&!/^\/search\?q=[A-Za-z0-9_-]{1,128}$/.test(path)) throw new HistoryError('INVALID_REQUEST','Unsupported history request.');
     const controller=new AbortController();let timer,reader;
     const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new HistoryError('UNAVAILABLE','Historical archive request timed out.'));},timeoutMs);});
     try {
-      const response=await Promise.race([fetchImpl('/api/history'+path,{method:'GET',credentials:'omit',redirect:'error',cache:'no-store',signal:controller.signal}),deadline]);
+      const response=await Promise.race([fetchImpl(HISTORY_BASE+path,{method:'GET',credentials:'omit',redirect:'error',cache:'no-store',signal:controller.signal}),deadline]);
       if(response.headers.get('x-xeris-network')!=='mainnet'||response.headers.get('x-xeris-chain-id')!==CHAIN) throw new HistoryError('INVALID_ARCHIVE','Historical archive network binding failed.');
       if(!response.body||Number(response.headers.get('content-length')||0)>4_194_304) throw new HistoryError('INVALID_ARCHIVE','Historical archive response is invalid.');
       reader=response.body.getReader();const chunks=[];let size=0;
@@ -50,7 +56,22 @@ export function createHistoryClient(network,{fetchImpl=fetch,timeoutMs=10_000}={
       if(!['blocks','transactions','address'].includes(kind)||cursor!==null&&(typeof cursor!=='string'||cursor.length>1024||!/^[A-Za-z0-9_-]+$/.test(cursor)))throw new HistoryError('INVALID_REQUEST','Invalid history page.');
       const value=await read('/'+(kind==='address'?'address/'+id(address):kind)+(cursor?'?cursor='+cursor:''));
       if(!Array.isArray(value.data)||value.data.length>100||value.cursor!==null&&(typeof value.cursor!=='string'||value.cursor.length>1024||!/^[A-Za-z0-9_-]+$/.test(value.cursor)))throw new HistoryError('INVALID_ARCHIVE','Historical archive page is invalid.');
+      if(!integer(value.snapshot_tip?.slot)||value.snapshot_tip.slot<value.coverage.indexed_from||value.snapshot_tip.slot>value.coverage.tip.slot||!HASH.test(value.snapshot_tip.hash)||value.data.some(row=>row?.slot>value.snapshot_tip.slot))throw new HistoryError('INVALID_ARCHIVE','Historical page snapshot is invalid.');
       value.data.forEach(row=>validateRecord(kind==='blocks'?'block':'transaction',row,value.coverage));
+      return value;
+    },
+    search:async(identifier)=>{
+      const query=id(String(identifier)),value=await read('/search?q='+query);
+      if(value.type==='address'){
+        const row=value.data;
+        if(!row||row.address!==query||!Array.isArray(row.transactions)||row.transactions.length>100||row.cursor!==null&&(typeof row.cursor!=='string'||row.cursor.length>1024||!/^[A-Za-z0-9_-]+$/.test(row.cursor)))throw new HistoryError('INVALID_ARCHIVE','Historical address search is invalid.');
+        if(!integer(row.snapshot_tip?.slot)||row.snapshot_tip.slot<value.coverage.indexed_from||row.snapshot_tip.slot>value.coverage.tip.slot||!HASH.test(row.snapshot_tip.hash)||row.transactions.some(tx=>tx?.slot>row.snapshot_tip.slot))throw new HistoryError('INVALID_ARCHIVE','Historical address snapshot is invalid.');
+        row.transactions.forEach(tx=>validateRecord('transaction',tx,value.coverage));
+      }else{
+        if(!['block','transaction'].includes(value.type))throw new HistoryError('INVALID_ARCHIVE','Historical search type is invalid.');
+        const row=validateRecord(value.type,value.data,value.coverage);
+        if(value.type==='transaction'?row.signature!==query:HASH.test(query)?row.hash!==query:row.slot!==Number(query))throw new HistoryError('INVALID_ARCHIVE','Historical search does not match this query.');
+      }
       return value;
     },
     record:async(kind,identifier)=>{

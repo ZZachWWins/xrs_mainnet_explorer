@@ -5,7 +5,8 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {proxyResponse} from './src/proxy.mjs';
 import {createHistoryFunction} from './netlify/functions/history.mjs';
-// Plain preview has no deployed Blobs context and never probes credentials.
+// Preview uses the same fixed public cloud history source. It has no deployed
+// Blobs context and never probes credentials; unavailable cloud data stays explicit.
 const historyPreview=createHistoryFunction({adapter:{readCurrent:async()=>null,readGeneration:async()=>null,readJSON:async()=>null}});
 const directory = fileURLToPath(new URL('./dist/', import.meta.url));
 const types = {'.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json'};
@@ -13,9 +14,14 @@ let active = 0;
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1:8770');
   try {
-    if (url.pathname.startsWith('/api/history/')) {
-      const result=await historyPreview(new Request(url,{method:request.method}));
-      response.writeHead(result.status,Object.fromEntries(result.headers));response.end(Buffer.from(await result.arrayBuffer()));return;
+    if (url.pathname.startsWith('/api/history/')||url.pathname.startsWith('/.netlify/functions/history/')) {
+      if(active>=20){response.writeHead(503,{'Cache-Control':'no-store'}).end();return;}
+      active++;
+      try{
+        const result=await historyPreview(new Request(url,{method:request.method}));
+        response.writeHead(result.status,Object.fromEntries(result.headers));response.end(Buffer.from(await result.arrayBuffer()));
+      }finally{active--;}
+      return;
     }
     if (url.pathname.startsWith('/networks/')) {
       if (active >= 20) { response.writeHead(503, {'Cache-Control': 'no-store'}).end(); return; }

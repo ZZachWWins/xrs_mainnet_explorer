@@ -1,0 +1,99 @@
+XERIS CLOUD HISTORY ARCHIVE — REVIEW REQUIRED BEFORE DEPLOYMENT
+
+This service owns only a derived SQLite database. It never signs, submits,
+mutates source ledger/receipt state, restarts a node, or reads private keys.
+Source canonicality comes from the unchanged local L1; v4 scrypt/Merkle/parent
+commitments are independently recomputed, but consensus signatures, difficulty
+and gap certificates are not independently revalidated here.
+
+INSTALLATION INPUTS (operator-reviewed, not automated by this document)
+
+1. Stage cloud_archive.py, history_index.py, wire.py and receipt_effects.py in
+   root-owned /opt/xeris/history-index. No dependencies beyond Python stdlib.
+2. Install a consistent SQLite BACKUP of the already verified public full-index
+   as /var/lib/xeris-explorer-history/index.sqlite3, owned by xeris-archive. Do not copy a live
+   SQLite database without its WAL; use SQLite backup. This directory must be
+   separate from /var/lib/xeris/mainnet-v4 and contain no private keys.
+3. The baseline must contain the original pinned block27,201 plus ledger_prefix
+   byte/digest/count evidence from verified backfill/tail. initialize() verifies
+   the baseline source bytes and derives a stable anchor1,000 records behind it.
+   It cannot bootstrap an arbitrary SQLite database or silently accept another
+   chain. The genesis roster file SHA and runtime roster commitment are pinned.
+4. Review/adapt the example unit paths to the actual host. The unit reads source
+   state as a separate xeris-archive UID under a read-only directory mount so
+   atomic ledger replacement is visible. Give that UID only directory-search ACL
+   and explicit read ACL on public ledger.dat/ruleset files; never default ACLs.
+   Root must maintain the exact public ledger inode's read ACL after replacement
+   using a reviewed metadata-only helper; unavailable access fails closed.
+   The two private producer files and /proc are inaccessible. All writes
+   are confined to the derived archive directory; no public node port is opened.
+5. Start only after independent tests/review. Measure CPU, RSS, refresh duration,
+   ledger read volume, and native RPC latency before enabling at boot. The
+   example applies CPUQuota50%, low CPU/I/O weight and512MiB memory maximum.
+
+REFRESH / PUBLICATION
+
+The worker waits5s between completed refreshes; refreshes never overlap. The
+measured51s refresh on the initial host requires this short idle interval to
+retain the unchanged120s anchor-freshness limit throughout the next refresh.
+CPUQuota50%, Nice10, IOWeight10 and the512MiB memory limit remain unchanged.
+Confirm fresh checkpoints and native RPC responsiveness over at least two full
+refresh cycles; slower cycles still fail closed instead of accepting old data.
+Each refresh checks the stable
+prefix digest, replays at most5,000 suffix records/128MiB, recomputes every v4
+header/Merkle root, preserves parent continuity, and rehashes the captured
+complete prefix. A partial trailing append is excluded. A second post-native-API
+hash check detects source changes during live anchoring. Ordinary appends beyond
+the captured prefix are allowed. Expect up to three streamed prefix reads per
+refresh; verify their cost on the selected host. No request scans the ledger.
+
+Suffix changes use only Index.replace_suffix inside one SQLite transaction
+after a proven common ancestor. Publication includes a fresh completed-block
+hash match with the SAME host's127.0.0.1:50008 API. Advancing the stable anchor,
+updating all derived records, coverage and generation metadata commit together.
+Independent read-only WAL snapshots keep HTTP history available during refresh.
+
+If the stable prefix differs, native evidence is wrong/unavailable, or a bound
+is exceeded, the entire candidate transaction is abandoned. The old published
+history remains accessible with coverage.stale=true. The exact checkpoint gate
+fails closed. An explicit reviewed rebuild/activation is required for divergence
+below the stable anchor; never reset or repair L1 state from this service.
+
+The canonicality age bound is120s and maxnative/disk tip difference100slots.
+The native feed supplies up to100 blocks to retain completed overlap between
+refreshes; every shared block still requires an exact hash and timestamp match.
+Deep same-inode tampering is detected on refresh; this does not claim instant
+defense against a privileged local writer between checks. Private keys and the
+L1's own signed consensus remain the security boundary for block acceptance.
+
+LOOPBACK HTTP (127.0.0.1:56003; GET only)
+
+  /health
+  /v2/block/slot/27201        Original pinned checkpoint, fresh local-node gate.
+  /history/coverage
+  /history/blocks[?cursor=...]
+  /history/transactions[?cursor=...]
+  /history/block/{slot-or-hash}
+  /history/transaction/{signature}
+  /history/address/{address}[?cursor=...]
+  /history/search?q={slot-or-hash-or-signature-or-address}
+
+Malformed pagination cursors return HTTP400. Cursors whose indexed snapshot
+changed or disappeared return HTTP410; restart pagination from its first page.
+An archive or database failure returns HTTP503 and is not treated as expiry.
+
+Requests choose no path, source URL, network, key or database. Bind a reviewed
+reverse proxy to only these public routes; preserve the frontend's exact fixed
+checkpoint and separate Testnet route. Do not proxy arbitrary node control APIs.
+The checkpoint response includes public transaction membership/instructions;
+membership alone is not an execution-success receipt. Previously verified
+receipt outcomes are retained for unchanged records; newly indexed outcomes
+remain unknown until a separate verified receipt import.
+
+NETLIFY BLOBS
+
+The existing history-index export and integrity-checked Blob publisher remain
+the separate public immutable-copy path. Export from a consistent SQLite backup
+of the activated archive generation, preserving declared coverage/generation.
+No Blob credentials are loaded by this service. Do not replace the live network
+identity check with an old static archive checkpoint by itself.
