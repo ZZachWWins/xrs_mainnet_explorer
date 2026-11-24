@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 import shutil
+from ui_reliability import repair_views
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / 'dist'
@@ -22,7 +23,7 @@ def build():
     shutil.copytree(VENDOR / 'logos', DIST / 'logos', dirs_exist_ok=True)
     shutil.copyfile(VENDOR / 'favicon.ico', DIST / 'favicon.ico')
     shutil.copyfile(VENDOR / 'assets/index-bamvo4ap.css', DIST / 'assets/explorer-ui.css')
-    for filename in ('network.mjs', 'explorer-api.mjs', 'bootstrap.mjs', 'explorer.css'):
+    for filename in ('network.mjs', 'explorer-api.mjs', 'bootstrap.mjs', 'explorer.css', 'view-loaders.mjs', 'navigation.mjs'):
         shutil.copyfile(ROOT / 'src' / filename, DIST / filename)
     original = (VENDOR / 'assets/index-xu2oldtt.js').read_text()
     start, end = original.index(',vc=new Map;'), original.index('function hs(e)')
@@ -97,6 +98,7 @@ def build():
             raise RuntimeError('Token metadata/holder separation patch no longer matches')
         token_ui = token_ui.replace(before, after)
     code = code[:token_start] + token_ui + code[token_end:]
+    code, reliability_count = repair_views(code)
     (DIST / 'assets/explorer-ui.js').write_text(code)
     (DIST / 'index.html').write_text('''<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -107,11 +109,13 @@ def build():
 </head><body class="bg-brand-navy text-text-body antialiased">
 <header class="network-bar"><div class="network-identification"><strong>XERIS NETWORK EXPLORER</strong><span id="network-status" role="status">Verifying network…</span></div>
 <div class="network-choice" id="network-selector" role="group" aria-label="Explorer network"><button type="button" data-network="testnet" aria-pressed="@TESTNET@">Testnet</button><button type="button" data-network="mainnet" aria-pressed="@MAINNET@">Mainnet</button></div></header>
-<p class="data-notice" id="data-notice" role="status" hidden></p><div id="root"></div>
-<noscript>This explorer needs JavaScript to verify and display the selected network.</noscript></body></html>'''.replace('@TESTNET@', str(default_network == 'testnet').lower()).replace('@MAINNET@', str(default_network == 'mainnet').lower()))
+<div class="data-notice" id="data-notice" role="status" hidden></div>
+<main class="startup-loader" id="startup-loader" role="status" aria-live="polite"><span class="loading-ring" aria-hidden="true"></span><h1 id="loading-title">Loading the explorer…</h1><p id="loading-detail">Connecting to the selected Xeris network.</p></main>
+<div id="root" aria-busy="true"></div>
+<noscript><style>.startup-loader{display:none}</style>This explorer needs JavaScript to verify and display the selected network.</noscript></body></html>'''.replace('@TESTNET@', str(default_network == 'testnet').lower()).replace('@MAINNET@', str(default_network == 'mainnet').lower()))
     manifest = {'format': 1, 'recovered_ui': True, 'default_network': default_network,
         'read_only': True, 'source_sha256': hashlib.sha256(original.encode()).hexdigest(),
-        'patched_ui_sha256': hashlib.sha256(code.encode()).hexdigest(), 'asserted_ui_corrections': len(changes) + len(token_changes) + 1,
+        'patched_ui_sha256': hashlib.sha256(code.encode()).hexdigest(), 'asserted_ui_corrections': len(changes) + len(token_changes) + 1 + reliability_count,
         'network_state': 'URL query; no persisted data or cross-network fallback',
         'files': {str(p.relative_to(DIST)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(DIST.rglob('*')) if p.is_file() and p.name != 'build-manifest.json'}}
     (DIST / 'build-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

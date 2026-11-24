@@ -27,7 +27,7 @@ export async function boundedBody(request, maximumBytes = 8192, timeoutMs = 3000
     const bytes = new Uint8Array(size); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     return new TextDecoder('utf-8', {fatal: true}).decode(bytes);
-  } catch (error) { await reader.cancel(); throw error; }
+  } catch (error) { void reader.cancel().catch(() => {}); throw error; }
   finally { clearTimeout(timer); }
 }
 function checkQuery(query) {
@@ -78,7 +78,12 @@ export function routeRequest(input, method = 'GET', body = null) {
   if (url.searchParams.has('token_id')) throw new Error('Exact legacy token lookup is Testnet only');
   return {network, url: NETWORKS[network].origin + path + url.search, method: 'GET', body: null};
 }
-export async function proxyResponse(request, {fetchImpl = fetch, timeoutMs} = {}) {
+function retryAfterHeader(value, now) {
+  if (typeof value !== 'string' || value.length > 128) return null;
+  const seconds = /^\d+$/.test(value) ? Number(value) : Math.ceil((Date.parse(value) - now) / 1000);
+  return Number.isFinite(seconds) && seconds >= 0 ? String(Math.min(86_400, seconds)) : null;
+}
+export async function proxyResponse(request, {fetchImpl = fetch, timeoutMs, now = Date.now} = {}) {
   const headers = {'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store, max-age=0',
     'X-Content-Type-Options': 'nosniff'};
   let route;
@@ -91,34 +96,46 @@ export async function proxyResponse(request, {fetchImpl = fetch, timeoutMs} = {}
   }
   headers['X-Xeris-Network'] = route.network;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs ?? (route.legacyTokens ? 20_000 : 10_000));
+  let timer;
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
+    controller.abort(); reject(new Error('Upstream deadline exceeded'));
+  }, timeoutMs ?? (route.legacyTokens ? 20_000 : 10_000)); });
   try {
-    const response = await fetchImpl(route.url, {method: route.method, body: route.body,
+    const response = await Promise.race([fetchImpl(route.url, {method: route.method, body: route.body,
       headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'Cache-Control': 'no-cache'},
-      redirect: 'error', cache: 'no-store', signal: controller.signal});
+      redirect: 'error', cache: 'no-store', signal: controller.signal}), deadline]);
     const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
     if (!response.ok || !['application/json', 'text/plain'].includes(contentType)) {
-      return new Response(JSON.stringify({success: false, error: `${NETWORKS[route.network].name} endpoint unavailable`, upstream_status: response.status}), {status: response.status === 404 || response.status === 405 ? 501 : 502, headers});
+      const transient = response.status === 429 || response.status === 503;
+      const retryAfter = transient ? retryAfterHeader(response.headers.get('retry-after'), now()) : null;
+      if (retryAfter !== null) headers['Retry-After'] = retryAfter;
+      if (response.body) void response.body.cancel().catch(() => {});
+      return new Response(JSON.stringify({success: false, error: `${NETWORKS[route.network].name} endpoint unavailable`,
+        error_code: response.status === 429 ? 'RATE_LIMITED' : 'UPSTREAM_UNAVAILABLE', upstream_status: response.status}),
+        {status: transient ? response.status : response.status === 404 || response.status === 405 ? 501 : 502, headers});
     }
     const maximumInput = route.legacyTokens ? 24 * 1024 * 1024 : 4_194_304;
     if (Number(response.headers.get('content-length') || 0) > maximumInput) throw new Error('Response too large');
     const reader = response.body.getReader(); let size = 0; const chunks = [];
     try {
       while (true) {
-        const {done, value} = await reader.read();
+        const {done, value} = await Promise.race([reader.read(), deadline]);
         if (done) break;
         size += value.byteLength;
         if (size > maximumInput) throw new Error('Response too large');
         chunks.push(value);
       }
-    } catch (error) { await reader.cancel(); throw error; }
-    const text = await new Blob(chunks).text();
+    } catch (error) { void reader.cancel().catch(() => {}); throw error; }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
     let output;
     if (route.legacyTokens) output = JSON.stringify(projectLegacyTokens(text, route.legacyTokens));
     else { JSON.parse(text); output = text; } // Legacy REST can label valid JSON text/plain.
     if (new TextEncoder().encode(output).byteLength > 4_194_304) throw new Error('Projected response too large');
     return new Response(output, {status: 200, headers});
   } catch {
-    return new Response(JSON.stringify({success: false, error: `${NETWORKS[route.network].name} data unavailable; no other network was queried`}), {status: 502, headers});
+    return new Response(JSON.stringify({success: false, error: `${NETWORKS[route.network].name} data unavailable; no other network was queried`,
+      error_code: controller.signal.aborted ? 'TIMEOUT' : 'UPSTREAM_UNAVAILABLE'}), {status: 502, headers});
   } finally { clearTimeout(timer); }
 }

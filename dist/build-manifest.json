@@ -4,19 +4,21 @@
   "default_network": "testnet",
   "read_only": true,
   "source_sha256": "89bf6570f6418a00dba59b2b4f6b5a141076e8b5bd95316bd103c14ee7e3df47",
-  "patched_ui_sha256": "fd1fd4f55ce91f647a5e5222f3b7981ca820d1b4917ed233712dc4be4a99378b",
-  "asserted_ui_corrections": 35,
+  "patched_ui_sha256": "507d759abeef892ec369d0ef10b5c4b185d3975a1016cdf4e5e35b5c311ba7f9",
+  "asserted_ui_corrections": 94,
   "network_state": "URL query; no persisted data or cross-network fallback",
   "files": {
     "assets/explorer-ui.css": "8b0584ef629031c6d226e5a064967b9da8f82045ed72baabdae933a8e35b8f47",
-    "assets/explorer-ui.js": "fd1fd4f55ce91f647a5e5222f3b7981ca820d1b4917ed233712dc4be4a99378b",
-    "bootstrap.mjs": "ba1f53fca0adf3d2ec1c1418b9003b2ffa8123b12ac47177d9844b8aad06fdcd",
-    "explorer-api.mjs": "4f022ddba36f19ec4993620de4872cc735b8ab104c10cfe46c6eef819f1534e9",
-    "explorer.css": "c37d68486e5ed88224bcbbcf114bc07a0073103008374d813b33c6243d0eb9da",
+    "assets/explorer-ui.js": "507d759abeef892ec369d0ef10b5c4b185d3975a1016cdf4e5e35b5c311ba7f9",
+    "bootstrap.mjs": "42c728f9c2c267afe461f3aac42f2e7e5c4f19f0f5ee4b361e92dac8e9acb27b",
+    "explorer-api.mjs": "d6cf4fe0396e45ad6bf10775c35d9f30937ef526979212994db4a9b2b834e2d2",
+    "explorer.css": "b74231da6a5f4cc9c2d295febb4e3ae9662c8715197c609251e2270770310d1b",
     "favicon.ico": "d951f8a121c9f65f89fbc992e259559d67862fc6c765e266d9ac26729c442e7d",
-    "index.html": "0f3dde912cf22f73b45f944788314089be75cb5a350f70989b785b453254f64a",
+    "index.html": "f964b0f575957a26b2443655b35dfd0fb7594dca80684e8954c7e86d2f3baefb",
     "logos/logodark.png": "63cffb851db33a2aae86e371fadcb60b437399ef233652859476b3138837caf7",
     "logos/logolight.png": "36e919d13ff6a0b16265f55e088b705ee26f8e7cb9432173058e49a722e14167",
-    "network.mjs": "09d5c1d7f5edd8cfbab1131097211fc1159fe1739296db80a755b559a6c9ade4"
+    "navigation.mjs": "b4983d59bf91ab9d46cbf3ab834153ad46dc7dfca16e46370e6c47b15cdc44aa",
+    "network.mjs": "09d5c1d7f5edd8cfbab1131097211fc1159fe1739296db80a755b559a6c9ade4",
+    "view-loaders.mjs": "f3da2534e5c5b6a943fd3d7dad573493df54b7fcacd20755384e56f8c8fd9036"
   }
 }

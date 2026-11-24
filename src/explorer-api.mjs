@@ -1,34 +1,93 @@
 import {NETWORKS, parsePublicJSON, verifyCheckpoint} from './network.mjs';
 
-export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {}, onNotice = () => {}, now = Date.now, getContext = () => ''} = {}) {
+export class ExplorerError extends Error {
+  constructor(message, {code = 'UNAVAILABLE', network, retryable = false, retryAfterMs = 0, status = null} = {}) {
+    super(message); this.name = 'ExplorerError';
+    Object.assign(this, {code, network, retryable, retryAfterMs, status});
+  }
+}
+export function retryAfterMilliseconds(value, now = Date.now()) {
+  if (typeof value !== 'string' || value.length > 128) return 0;
+  const delay = /^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - now;
+  return Number.isFinite(delay) ? Math.min(86_400_000, Math.max(0, Math.ceil(delay))) : 0;
+}
+
+export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {}, onNotice = () => {}, now = Date.now, getContext = () => '', readTimeoutMs, supplyTimeoutMs = 2000} = {}) {
   if (!Object.hasOwn(NETWORKS, network)) throw new Error('Unknown network');
   const prefix = `/networks/${network}`;
   let identity;
   const pending = new Map();
-  async function read(path, {identityCheck = false} = {}) {
+  const error = (message, options) => new ExplorerError(message, {network, ...options});
+  async function read(path, {identityCheck = false, reportError = true, timeoutMs} = {}) {
     const context = getContext();
-    if (!identityCheck) await ready();
-    if (pending.has(path)) return pending.get(path);
-    const task = (async () => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), network === 'testnet' && path.startsWith('/v2/tokens') ? 25_000 : 12_000);
-      try {
-        const response = await fetchImpl(prefix + path, {cache: 'no-store', credentials: 'omit', redirect: 'error', signal: controller.signal});
-        if (!response.ok) throw new Error(`${NETWORKS[network].name}: this data is currently unavailable`);
-        if (response.headers.get('x-xeris-network') !== network) throw new Error('Network response binding failed');
-        const result = parsePublicJSON(await response.text());
-        if (result?.success === false || result?.error) throw new Error(`${NETWORKS[network].name}: requested record is unavailable`);
-        return result;
-      } catch (error) { onError(error.message, context); throw error; }
-      finally { clearTimeout(timer); }
-    })();
-    pending.set(path, task);
-    try { return await task; } finally { if (pending.get(path) === task) pending.delete(path); }
+    const pendingKey = path + (timeoutMs === undefined ? '' : `|deadline:${timeoutMs}`);
+    try {
+      if (!identityCheck) await ready();
+      if (!pending.has(pendingKey)) {
+        const task = (async () => {
+          const controller = new AbortController(); let timer;
+          const timeout = timeoutMs ?? readTimeoutMs ?? (network === 'testnet' && path.startsWith('/v2/tokens') ? 25_000 : 12_000);
+          const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
+            controller.abort(); reject(error(`${NETWORKS[network].name}: the data request timed out`, {code: 'TIMEOUT', retryable: true}));
+          }, timeout); });
+          let reader;
+          try {
+            const response = await Promise.race([fetchImpl(prefix + path, {cache: 'no-store', credentials: 'omit', redirect: 'error', signal: controller.signal}), deadline]);
+            if (!response.ok) {
+              if (response.body) void response.body.cancel().catch(() => {});
+              throw error(`${NETWORKS[network].name}: this data is currently unavailable`, {
+              code: response.status === 429 ? 'RATE_LIMITED' : response.status === 501 ? 'UNSUPPORTED_ENDPOINT' : 'HTTP_ERROR',
+              status: response.status, retryable: response.status === 429 || response.status >= 500 && response.status !== 501,
+              retryAfterMs: retryAfterMilliseconds(response.headers.get('retry-after'), now()),
+            });
+            }
+            if (response.headers.get('x-xeris-network') !== network) throw error('Network response binding failed', {code: 'NETWORK_MISMATCH'});
+            const maximumBytes = 4_194_304;
+            if (Number(response.headers.get('content-length') || 0) > maximumBytes) throw error('Public response exceeds size limit', {code: 'INVALID_RESPONSE'});
+            if (!response.body) throw error('Missing public response', {code: 'INVALID_RESPONSE'});
+            reader = response.body.getReader(); const chunks = []; let size = 0;
+            while (true) {
+              const {done, value} = await Promise.race([reader.read(), deadline]);
+              if (done) break;
+              size += value.byteLength;
+              if (size > maximumBytes) throw error('Public response exceeds size limit', {code: 'INVALID_RESPONSE'});
+              chunks.push(value);
+            }
+            const bytes = new Uint8Array(size); let offset = 0;
+            for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+            let result;
+            try { result = parsePublicJSON(new TextDecoder('utf-8', {fatal: true}).decode(bytes)); }
+            catch { throw error('Invalid public response', {code: 'INVALID_RESPONSE'}); }
+            if (!result || typeof result !== 'object' || Array.isArray(result)) throw error('Invalid public response', {code: 'INVALID_RESPONSE'});
+            if (result.success === false || result.error) throw error(`${NETWORKS[network].name}: requested record is unavailable`, {code: 'RECORD_UNAVAILABLE'});
+            return result;
+          } catch (cause) {
+            if (reader) void reader.cancel().catch(() => {});
+            if (cause instanceof ExplorerError) throw cause;
+            throw error(`${NETWORKS[network].name}: this data is currently unavailable`, {code: controller.signal.aborted ? 'TIMEOUT' : 'TRANSPORT_ERROR', retryable: true});
+          } finally { clearTimeout(timer); }
+        })();
+        pending.set(pendingKey, task);
+        // Delete before a later explicit retry; no settled response cache.
+        task.then(() => { if (pending.get(pendingKey) === task) pending.delete(pendingKey); }, () => { if (pending.get(pendingKey) === task) pending.delete(pendingKey); });
+      }
+      return await pending.get(pendingKey);
+    } catch (cause) {
+      if (reportError) onError(cause.message, context, cause);
+      throw cause;
+    }
   }
   function ready() {
     if (!identity) {
-      identity = read(`/v2/block/slot/${NETWORKS[network].checkpointSlot}`, {identityCheck: true})
-        .then(value => verifyCheckpoint(network, value));
+      const attempt = read(`/v2/block/slot/${NETWORKS[network].checkpointSlot}`, {identityCheck: true, reportError: false})
+        .then(value => {
+          try { return verifyCheckpoint(network, value); }
+          catch { throw error('Network checkpoint mismatch; data display stopped', {code: 'NETWORK_MISMATCH'}); }
+        });
+      identity = attempt;
+      // An unavailable transport can recover on a later caller. A real identity
+      // mismatch remains latched, so retrying can never override a wrong chain.
+      attempt.catch(cause => { if (cause.retryable && identity === attempt) identity = undefined; });
     }
     return identity;
   }
@@ -53,7 +112,7 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
     const result = {...response.data, num_validators: response.data.validator_count};
     if (network === 'mainnet') {
       try {
-        const feed = await read('/market/supply');
+        const feed = await read('/market/supply', {reportError: false, timeoutMs: supplyTimeoutMs});
         if (feed.schema_version !== '2' || feed.chain_id !== 'xeris-mainnet-v4' || feed.status !== 'ready' ||
             feed.supply?.basis !== 'unlocked_on_chain_v2' || !/^[0-9]+$/.test(feed.supply?.circulating_raw) ||
             !/^[0-9]+$/.test(feed.expires_at_ms) || BigInt(feed.expires_at_ms) <= BigInt(now())) throw new Error('Live circulating supply unavailable');
@@ -77,7 +136,7 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
       if (!Array.isArray(response.data)) throw new Error('Invalid blocks response');
       return response.data.map(normalizeBlock);
     },
-    block: async slot => normalizeBlock((await read(`/v2/block/slot/${encodeURIComponent(slot)}`)).data),
+    block: async (slot, {optional = false} = {}) => normalizeBlock((await read(`/v2/block/slot/${encodeURIComponent(slot)}`, optional ? {reportError: false, timeoutMs: 2000} : {})).data),
     transactions: async (page = 1, pageSize = 20) => read(`/v2/transactions?page=${page}&page_size=${pageSize}`),
     transaction: async signature => (await read(`/v2/tx/${encodeURIComponent(signature)}`)).data,
     account: async address => (await read(`/v2/account/${encodeURIComponent(address)}`)).data,
