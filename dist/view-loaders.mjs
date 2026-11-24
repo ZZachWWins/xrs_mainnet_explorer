@@ -1,3 +1,4 @@
+export {sortAccounts, accountUSD, accountFirstSeen} from './accounts.mjs';
 // View lifetimes are independent of RPC lifetimes. A response for a previous
 // route must never overwrite the next account, page or record.
 export function loadAccountView(api, address, page, emit) {

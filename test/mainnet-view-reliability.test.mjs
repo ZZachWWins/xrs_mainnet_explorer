@@ -22,7 +22,7 @@ function button(tree,label){const matches=nodes(tree,n=>n.type==='button'&&label
 function loading(tree,name){const messages=nodes(tree,n=>n.props.className==='view-loading'&&n.props.role==='status');assert.equal(messages.length,1);assert.match(text(messages[0]),name);assert.equal(nodes(messages[0],n=>n.props.className==='loading-circle'&&String(n.props['aria-hidden'])==='true').length,1);}
 
 function harness(name,api={},params={}){
-  const state=[],refs=[],effects=[],pending=[];let at=0,refAt=0,effectAt=0,dirty=false;
+  const state=[],refs=[],effects=[],pending=[],timers=new Map();let at=0,refAt=0,effectAt=0,dirty=false,clock=Date.now(),timerId=0;
   const React={Fragment:'Fragment',useState(initial){const index=at++;if(!(index in state))state[index]=typeof initial==='function'?initial():initial;return[state[index],value=>{const next=typeof value==='function'?value(state[index]):value;if(!Object.is(next,state[index])){state[index]=next;dirty=true;}}];},
     useRef(initial){const index=refAt++;return refs[index]||(refs[index]={current:initial});},
     useEffect(effect,deps){const index=effectAt++,old=effects[index];if(!old||deps.some((value,i)=>value!==old.deps[i])){pending.push(()=>{old?.cleanup?.();effects[index]={deps,cleanup:effect()};});}},
@@ -31,17 +31,17 @@ function harness(name,api={},params={}){
   // harness. Actual component bodies, hooks, loaders and formatting still run.
   const knownGlobals=new Set(Object.getOwnPropertyNames(globalThis));const scope={};
   for(const word of componentSource.matchAll(/\b[A-Za-z_$][\w$]*\b/g))if(!knownGlobals.has(word[0]))scope[word[0]]=word[0];
-  const defaults={network:'mainnet',balances:async()=>({}),tokens:async()=>[],contracts:async()=>[],pools:async()=>[],
+  const defaults={network:'mainnet',balances:async()=>({}),accountAges:async()=>({data:[],basis:'earliest_indexed_activity',truncated:false}),accountPrice:async()=>null,tokens:async()=>[],contracts:async()=>[],pools:async()=>[],
     account:async address=>({address,balance:'0',stake:'0',blocks_proposed:0}),accountTransactions:async()=>({data:[],pagination:{page:1,total_pages:1,total:0}}),
     block:async()=>null,contract:async()=>null};
   const selected={...defaults,...api};
-  Object.assign(scope,{a:{jsx,jsxs:jsx},v:React,A:'Link',$r:()=>params,console:{error(){},warn(){},log(){}},
+  Object.assign(scope,{Date:class extends Date{static now(){return clock}},setInterval:(callback,delay)=>{const id=++timerId;timers.set(id,{callback,delay});return id;},clearInterval:id=>timers.delete(id),a:{jsx,jsxs:jsx},v:React,A:'Link',$r:()=>params,console:{error(){},warn(){},log(){}},
     window:{XerisExplorerAPI:selected,XerisExplorerFormat:rawUnits,XerisExplorerViews:loaders,
       XerisExplorerNavigation:()=>()=>null,XerisExplorerHistory:()=>()=>null},
     uf:selected.balances,Ur:selected.tokens,ag:selected.contracts,cg:selected.pools,ng:selected.account,yc:selected.accountTransactions,og:selected.contract,tn:selected.block});
   vm.runInNewContext(componentSource+';globalThis.__testedView='+name,scope,{timeout:1000});
   return{render(){for(let pass=0;pass<10;pass++){dirty=false;at=refAt=effectAt=0;const tree=scope.__testedView();while(pending.length)pending.shift()();if(!dirty)return tree;}assert.fail('View did not settle after synchronous effect updates');},
-    async settled(){await tick();await tick();return this.render();},dispose(){for(const item of effects)item?.cleanup?.();}};
+    async settled(){await tick();await tick();return this.render();},setNow(value){clock=value;},timer(delay){for(const timer of timers.values())if(timer.delay===delay)timer.callback();},timerCount(){return timers.size;},dispose(){for(const item of effects)item?.cleanup?.();}};
 }
 
 test('Accounts has named loading, retry on failure, and an explicit successful-empty state',async()=>{
@@ -50,7 +50,7 @@ test('Accounts has named loading, retry on failure, and an explicit successful-e
     loading(ui.render(),/loading.*account/i);attempt.reject(Error('offline'));let tree=await ui.settled();
     assert.match(text(tree),/unavailable|could not|failed/i);assert.doesNotMatch(text(tree),/no (accounts|balances|holders)/i);
     attempt=deferred();button(tree,/retry/i).props.onClick();loading(ui.render(),/loading.*account/i);attempt.resolve({});tree=await ui.settled();
-    assert.equal(calls,2);assert.match(text(tree),/no (accounts|balances|holders)/i);assert.doesNotMatch(text(tree),/unavailable|could not|failed/i);
+    assert.equal(calls,2);assert.match(text(tree),/no (accounts|balances|holders)/i);assert.doesNotMatch(text(tree),/Accounts data is unavailable|Accounts data could not|Accounts data failed/i);
   }finally{ui.dispose();}
 });
 
@@ -132,3 +132,110 @@ for(const decimals of [null,0]){
     }finally{ui.dispose();}
   });
 }
+
+const accountAddress = index => '1'.repeat(31) + '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'[index];
+const accountRows = tree => nodes(tree,node=>node.type==='tr'&&node.props.className==='data-table-row');
+const accountLinks = tree => nodes(tree,node=>node.type==='Link'&&node.props.to?.startsWith('/account/')).map(node=>text(node));
+const usdCells = tree => nodes(tree,node=>node.props.className==='accounts-number accounts-usd').map(text);
+const accountQuote = {numerator:'10000000',denominator:'1000000000',observedAtMs:'9000',expiresAtMs:'29000'};
+
+test('Accounts replaces wealth-ranking labels and defaults to oldest known activity with unknown ages last',async()=>{
+  const addresses=[0,1,2,3].map(accountAddress),balances={
+    [addresses[0]]:'2000000000',[addresses[1]]:'1000000000',[addresses[2]]:'0',[addresses[3]]:'200165828090408815'};
+  const ages={basis:'earliest_indexed_activity',truncated:true,data:[
+    {address:addresses[0],first_seen_slot:10,first_seen_timestamp_ms:null},
+    {address:addresses[1],first_seen_slot:1,first_seen_timestamp_ms:1000},
+    {address:addresses[2],first_seen_slot:10,first_seen_timestamp_ms:10000}]};
+  const ui=harness('nv',{balances:async()=>balances,accountAges:async()=>ages,accountPrice:async()=>accountQuote});ui.setNow(10000);
+  try{
+    ui.render();let tree=await ui.settled();
+    assert.equal(text(nodes(tree,node=>node.type==='h1')[0]),'Accounts');assert.doesNotMatch(bundle,/Rich List|Top Holder/);
+    assert.deepEqual(accountLinks(tree),[addresses[1],addresses[0],addresses[2],addresses[3]]);
+    assert.match(text(tree),/First-seen coverage is partial/);assert.match(text(tree),/200,165,828\.090408815/);
+    assert.ok(usdCells(tree).includes('$2,001,658,280.90'));assert.ok(usdCells(tree).includes('$0.00'));
+    assert.match(text(tree),/xUSDC valued at US\$1/);assert.match(text(tree),/Actual trade proceeds vary with fees and price impact/);
+    for(const row of accountRows(tree))assert.equal(nodes(row,node=>node.props['data-label']==='Est. value (USD)').length,1);
+    button(tree,/Balance \(XRS\)/).props.onClick();tree=ui.render();
+    assert.deepEqual(accountLinks(tree),[addresses[3],addresses[0],addresses[1],addresses[2]]);
+  }finally{ui.dispose();}
+});
+
+test('optional age and price reads can remain pending or fail without removing native balance rows',async()=>{
+  const ages=deferred(),price=deferred();const ui=harness('nv',{balances:async()=>({[owner]:'9007199254740993'}),accountAges:()=>ages.promise,accountPrice:()=>price.promise});
+  try{
+    ui.render();let tree=await ui.settled();assert.deepEqual(accountLinks(tree),[owner]);assert.match(text(tree),/9,007,199\.254740993/);
+    assert.deepEqual(usdCells(tree),['Loading…']);
+    assert.match(text(nodes(tree,node=>node.props['data-source']==='ages')[0]),/Loading first-seen history/);
+    ages.reject(Error('history offline'));price.reject(Error('invalid quote'));tree=await ui.settled();
+    assert.deepEqual(accountLinks(tree),[owner]);assert.deepEqual(usdCells(tree),['Unavailable']);
+    assert.match(text(tree),/First-seen history is unavailable/);assert.match(text(tree),/Estimated USD values are unavailable/);
+    assert.doesNotMatch(text(tree),/Accounts data is unavailable/);
+  }finally{ui.dispose();}
+});
+
+test('transient price failure retains only the originally valid quote and the one-second expiry removes its values',async()=>{
+  let failure=false;const ui=harness('nv',{balances:async()=>({[owner]:'1000000000'}),accountPrice:async()=>{if(failure)throw Object.assign(Error('temporary'),{retryable:true});return accountQuote;}});ui.setNow(10000);
+  try{
+    ui.render();let tree=await ui.settled();assert.deepEqual(usdCells(tree),['$10.00']);
+    failure=true;ui.timer(10000);tree=await ui.settled();assert.deepEqual(usdCells(tree),['$10.00']);assert.match(text(tree),/original expiry/);
+    ui.setNow(29000);ui.timer(1000);tree=ui.render();assert.deepEqual(usdCells(tree),['Unavailable']);assert.deepEqual(accountLinks(tree),[owner]);
+  }finally{ui.dispose();}
+});
+
+test('invalid or wrong-chain price failures clear the prior quote before its expiry',async()=>{
+  for(const code of ['INVALID_RESPONSE','NETWORK_MISMATCH']){
+    let invalid=false;const ui=harness('nv',{balances:async()=>({[owner]:'1000000000'}),accountPrice:async()=>{if(invalid)throw Object.assign(Error('invalid'),{code,retryable:false});return accountQuote;}});ui.setNow(10000);
+    try{
+      ui.render();assert.deepEqual(usdCells(await ui.settled()),['$10.00']);invalid=true;ui.timer(10000);
+      const tree=await ui.settled();assert.deepEqual(usdCells(tree),['Unavailable']);assert.deepEqual(accountLinks(tree),[owner]);
+    }finally{ui.dispose();}
+  }
+});
+
+test('price polling and manual refresh share an in-flight read and dispose both timers',async()=>{
+  const price=deferred();let calls=0;const ui=harness('nv',{balances:async()=>({[owner]:'1'}),accountPrice:()=>{calls++;return price.promise;}});ui.setNow(10000);
+  ui.render();let tree=await ui.settled();assert.equal(calls,1);ui.timer(10000);ui.timer(10000);assert.equal(calls,1);
+  button(tree,/Refresh accounts/).props.onClick();ui.render();tree=await ui.settled();assert.equal(calls,1);
+  price.resolve(accountQuote);tree=await ui.settled();assert.deepEqual(usdCells(tree),['<$0.01']);
+  ui.dispose();assert.equal(ui.timerCount(),0);
+});
+
+test('Testnet Accounts never requests or reuses Mainnet age and valuation metadata',async()=>{
+  let optional=0;const ui=harness('nv',{network:'testnet',balances:async()=>({[owner]:'1000000000'}),
+    accountAges:async()=>{optional++;throw Error('must not call');},accountPrice:async()=>{optional++;throw Error('must not call');}});
+  try{
+    ui.render();const tree=await ui.settled();assert.equal(optional,0);assert.equal(ui.timerCount(),0);assert.deepEqual(accountLinks(tree),[owner]);
+    assert.deepEqual(usdCells(tree),['Unavailable']);assert.match(text(tree),/unavailable on Testnet/);
+  }finally{ui.dispose();}
+});
+
+test('Accounts pagination makes every returned account reachable and search resets to its first page',async()=>{
+  const addresses=Array.from({length:51},(_,index)=>accountAddress(index));const balances=Object.fromEntries(addresses.map((address,index)=>[address,String(index+1)]));
+  const ui=harness('nv',{network:'testnet',balances:async()=>balances});
+  try{
+    ui.render();let tree=await ui.settled();assert.equal(accountLinks(tree).length,50);
+    button(tree,/Next accounts/).props.onClick();tree=ui.render();assert.equal(accountLinks(tree).length,1);
+    const last=accountLinks(tree)[0];const search=nodes(tree,node=>node.type==='input'&&node.props.type==='search')[0];search.props.onChange({target:{value:last}});
+    tree=ui.render();assert.deepEqual(accountLinks(tree),[last]);assert.match(text(tree),/1–1 of 1 matching accounts/);
+  }finally{ui.dispose();}
+});
+
+test('mobile Accounts exposes labeled sorting synchronized with desktop headers and hides unfocusable headers',async()=>{
+  const addresses=[0,1,2].map(accountAddress),balances=Object.fromEntries(addresses.map((address,index)=>[address,String(3-index)]));
+  const ages={basis:'earliest_indexed_activity',truncated:false,data:addresses.slice(0,2).map((address,index)=>({address,first_seen_slot:index+1,first_seen_timestamp_ms:null}))};
+  const ui=harness('nv',{balances:async()=>balances,accountAges:async()=>ages});
+  const control=tree=>nodes(tree,node=>node.type==='select'&&node.props['aria-label']==='Sort accounts')[0];
+  try{
+    ui.render();let tree=await ui.settled();assert.equal(control(tree).props.value,'age:asc');
+    assert.equal(nodes(tree,node=>node.type==='label'&&node.props.className==='accounts-mobile-sort').length,1);
+    const expected=[['age:desc',[addresses[1],addresses[0],addresses[2]]],['balance:asc',[addresses[2],addresses[1],addresses[0]]],
+      ['balance:desc',addresses],['address:asc',addresses],['address:desc',[...addresses].reverse()],['age:asc',addresses]];
+    assert.deepEqual(nodes(control(tree),node=>node.type==='option').map(node=>node.props.value),['age:asc','age:desc','balance:desc','balance:asc','address:asc','address:desc']);
+    for(const [value,order] of expected){control(tree).props.onChange({target:{value}});tree=ui.render();assert.deepEqual(accountLinks(tree),order);assert.equal(control(tree).props.value,value);}
+    button(tree,/Balance \(XRS\)/).props.onClick();tree=ui.render();assert.equal(control(tree).props.value,'balance:desc');
+    const css=readFileSync(new URL('../src/explorer.css',import.meta.url),'utf8');
+    const mobile=css.slice(css.lastIndexOf('@media(max-width:767px)'));
+    assert.match(mobile,/\.accounts-table thead\{display:none\}/);assert.match(mobile,/\.accounts-mobile-sort\{display:grid/);
+    assert.match(mobile,/grid-template-columns:minmax\(0,1\.4fr\) minmax\(0,1fr\)/);
+  }finally{ui.dispose();}
+});

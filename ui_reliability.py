@@ -200,19 +200,8 @@ def repair_mainnet_views(code):
     def loading(message):
         return 'a.jsxs("div",{className:"view-loading",role:"status","aria-live":"polite",children:[a.jsx("span",{className:"loading-circle","aria-hidden":true}),a.jsx("span",{children:"' + message + '"})]})'
 
-    def accounts(text):
-        text = one(text, 'function nv(){const[e,t]', 'function nv(){const[accountsError,setAccountsError]=v.useState(null),[accountsReady,setAccountsReady]=v.useState(false),[accountsAttempt,setAccountsAttempt]=v.useState(0);const[e,t]', 'accounts explicit state')
-        text = one(text, 'v.useEffect(()=>{uf().then(g=>{t(g),r(!1)}).catch(g=>{console.error(g),r(!1)}),void 0},[])',
-            'v.useEffect(()=>{let alive=true;r(true);setAccountsError(null);Promise.resolve().then(()=>uf()).then(rows=>{if(alive){t(rows);setAccountsReady(true);r(false)}}).catch(()=>{if(alive){setAccountsError("Accounts data is unavailable. Please retry.");r(false)}});return()=>{alive=false}},[accountsAttempt])', 'accounts load lifetime and retry')
-        text = one(text, 'a.jsx("section",{className:"glass-card",children:',
-            'accountsReady&&accountsError&&a.jsx("p",{role:"status",children:accountsError+" Showing the previous successful result."}),accountsReady&&n&&' + loading('Refreshing accounts…') + ',a.jsx("button",{type:"button",disabled:n,onClick:()=>setAccountsAttempt(value=>value+1),className:"mb-4 text-brand-vibrant hover:underline",children:accountsError?"Retry accounts":"Refresh accounts"}),a.jsx("section",{className:"glass-card",children:', 'accounts refresh and retained-data notice')
-        start = text.index('n?[...Array(12)]')
-        end = text.index(':x.map(', start) + len(':x.map(')
-        text = one(text, text[start:end], 'n&&!accountsReady?a.jsx("tr",{children:a.jsx("td",{colSpan:3,children:' + loading('Loading accounts…') + '})}):x.length?x.map(', 'accounts named loading')
-        text = one(text, ']},g))})]})', ']},g)):a.jsx("tr",{children:a.jsx("td",{colSpan:3,className:"p-8 text-center text-text-dim",role:"status",children:accountsError|| (l?"No accounts match this search.":"No accounts returned for this network.")})})})]})', 'accounts empty distinct from error')
-        text = one(text, '(y/1e9).toLocaleString(void 0,{maximumFractionDigits:0})', 'window.XerisExplorerFormat(y,9,9)', 'accounts exact native balances')
-        return text
-    view('nv', 'rv', accounts)
+    code, account_assertions = repair_accounts_view(code)
+    asserted += account_assertions
 
     def registry(text, name, call, label):
         text = one(text, f'function {name}(){{const[e,t]', f'function {name}(){{const[listAttempt,setListAttempt]=v.useState(0);const[e,t]', label + ' retry state')
@@ -255,3 +244,116 @@ function XerisPoolPrice(pool,decimals){const a=decimals[pool.token_a],b=decimals
     view('ov', 'XerisOwnerAddress', account_status)
     view('pv', 'mv', lambda text: one(text, '(parseFloat(o.price_a_in_b)*Math.pow(10,(n[o.token_a]||9)-(n[o.token_b]||6))).toLocaleString(void 0,{maximumFractionDigits:6})', 'XerisPoolPrice(o,n)', 'exact pool price requires known decimals'))
     return code, asserted
+
+
+def repair_accounts_view(code):
+    """Replace only the recovered Accounts view and its account return label."""
+    start, end = 'function nv(', 'function rv('
+    if code.count(start) != 1 or code.count(end) != 1:
+        raise RuntimeError('Accounts component boundaries changed')
+    left, right = code.index(start), code.index(end, code.index(start))
+    original = code[left:right]
+    if original.count('Rich List') != 1 or original.count('Top Holder') != 1:
+        raise RuntimeError('Expected original Accounts heading before replacement')
+    replacement = r'''
+function nv(){
+  const api=window.XerisExplorerAPI,views=window.XerisExplorerViews,h=v.createElement;
+  const[balances,setBalances]=v.useState({}),[ready,setReady]=v.useState(false),[busy,setBusy]=v.useState(true),[error,setError]=v.useState(null);
+  const[query,setQuery]=v.useState(""),[sort,setSort]=v.useState({key:"age",direction:"asc"}),[page,setPage]=v.useState(1),[refresh,setRefresh]=v.useState(0);
+  const[ages,setAges]=v.useState({data:[],basis:"unavailable",truncated:false}),[ageStatus,setAgeStatus]=v.useState(api.network==="mainnet"?"loading":"unavailable");
+  const[quote,setQuote]=v.useState(null),[priceStatus,setPriceStatus]=v.useState(api.network==="mainnet"?"loading":"unavailable"),[,setClock]=v.useState(0);
+  const ageRequest=v.useRef(null),priceRequest=v.useRef(null);
+  const shared=(reference,read)=>{
+    if(!reference.current){
+      const task=Promise.resolve().then(read);reference.current=task;
+      task.then(()=>{if(reference.current===task)reference.current=null},()=>{if(reference.current===task)reference.current=null});
+    }
+    return reference.current;
+  };
+  v.useEffect(()=>{
+    let alive=true;setBusy(true);setError(null);
+    Promise.resolve().then(()=>api.balances()).then(rows=>{
+      if(alive){setBalances(rows);setReady(true);setBusy(false)}
+    }).catch(()=>{if(alive){setError("Accounts data is unavailable. Please retry.");setBusy(false)}});
+    return()=>{alive=false};
+  },[refresh]);
+  v.useEffect(()=>{
+    if(api.network!=="mainnet")return;
+    let alive=true;setAgeStatus("loading");
+    shared(ageRequest,()=>api.accountAges()).then(value=>{
+      if(alive){setAges(value);setAgeStatus("ready")}
+    }).catch(()=>{if(alive){setAges({data:[],basis:"unavailable",truncated:false});setAgeStatus("error")}});
+    return()=>{alive=false};
+  },[refresh]);
+  v.useEffect(()=>{
+    if(api.network!=="mainnet")return;
+    let alive=true,reading=false;
+    const update=()=>{
+      if(!alive||reading)return;reading=true;setPriceStatus("loading");
+      shared(priceRequest,()=>api.accountPrice()).then(value=>{
+        if(alive){setQuote(value);setPriceStatus(value?"ready":"unavailable")}
+      }).catch(cause=>{if(alive){if(cause?.retryable!==true)setQuote(null);setPriceStatus("error")}}).finally(()=>{reading=false});
+    };
+    update();const timer=setInterval(update,10000),clock=setInterval(()=>{if(alive)setClock(value=>value+1)},1000);
+    return()=>{alive=false;clearInterval(timer);clearInterval(clock)};
+  },[refresh]);
+  const entries=Object.entries(balances),filtered=entries.filter(([account])=>account.toLowerCase().includes(query.trim().toLowerCase()));
+  const sorted=views.sortAccounts(filtered,ages.data,sort.key,sort.direction),pages=Math.max(1,Math.ceil(sorted.length/50)),currentPage=Math.min(page,pages);
+  const visible=sorted.slice((currentPage-1)*50,currentPage*50),ageMap=new Map(ages.data.map(value=>[value.address,value]));
+  const priced=views.accountUSD("0",quote,Date.now())!==null;
+  const chooseSort=key=>{setSort(previous=>({key,direction:previous.key===key?(previous.direction==="asc"?"desc":"asc"):key==="balance"?"desc":"asc"}));setPage(1)};
+  const indicator=key=>sort.key===key?(sort.direction==="asc"?" ↑":" ↓"):"";
+  const loading=label=>h("div",{className:"view-loading",role:"status","aria-live":"polite"},h("span",{className:"loading-circle","aria-hidden":true}),h("span",null,label));
+  const metadata=(kind,status,message)=>h("p",{className:"accounts-metadata-status",role:"status","data-source":kind},
+    status==="loading"&&h("span",{className:"loading-circle","aria-hidden":true}),message);
+  const ageMessage=api.network!=="mainnet"?"First-seen history is unavailable on Testnet.":ageStatus==="loading"?"Loading first-seen history…":
+    ageStatus==="error"?"First-seen history is unavailable. Refresh accounts to retry.":ages.truncated?"First-seen coverage is partial. Unknown accounts are listed last.":
+    null;
+  const priceMessage=api.network!=="mainnet"?"Estimated USD values are unavailable on Testnet.":priceStatus==="loading"?"Refreshing the pool spot price…":
+    priceStatus==="error"?(priced?"Price refresh failed; the previous quote remains valid until its original expiry.":"Estimated USD values are unavailable. Price refresh will retry automatically."):
+    !priced?"The spot price is unavailable or expired. Values will return after a fresh quote.":
+    null;
+  const sortHeader=(key,label,className)=>h("th",{scope:"col",className:"data-table-header "+className,"aria-sort":sort.key===key?(sort.direction==="asc"?"ascending":"descending"):"none"},
+    h("button",{type:"button",className:"accounts-sort",onClick:()=>chooseSort(key)},label,indicator(key)));
+  return h("main",{className:"accounts-view max-w-7xl mx-auto px-10 pt-16"},
+    h("div",{className:"accounts-heading"},h("div",null,h("h1",{className:"text-4xl mb-2 text-white"},"Accounts"),
+      h("p",{className:"text-text-dim"},"Native XRS balances on the selected network.")),
+      h("label",{className:"accounts-search"},h("span",null,"Search accounts"),h("input",{type:"search",value:query,placeholder:"Search an address",maxLength:128,
+        autoComplete:"off",spellCheck:false,onChange:event=>{setQuery(event.target.value);setPage(1)}}))),
+    h("div",{className:"accounts-toolbar"},h("p",{className:"text-text-dim"},ready?entries.length.toLocaleString()+" accounts returned":"Accounts on this network"),
+      h("button",{type:"button",className:"accounts-refresh",disabled:busy,onClick:()=>setRefresh(value=>value+1)},error?"Retry accounts":"Refresh accounts")),
+    h("label",{className:"accounts-mobile-sort"},h("span",null,"Sort accounts"),
+      h("select",{value:sort.key+":"+sort.direction,"aria-label":"Sort accounts",onChange:event=>{
+        const[key,direction]=event.target.value.split(":");setSort({key,direction});setPage(1)}},
+        h("option",{value:"age:asc"},"Oldest recorded first"),h("option",{value:"age:desc"},"Newest recorded first"),
+        h("option",{value:"balance:desc"},"Highest balance first"),h("option",{value:"balance:asc"},"Lowest balance first"),
+        h("option",{value:"address:asc"},"Address A–Z"),h("option",{value:"address:desc"},"Address Z–A"))),
+    ready&&error&&h("p",{role:"status",className:"accounts-retained"},error+" Showing the previous successful result."),
+    ready&&busy&&loading("Refreshing accounts…"),
+    h("div",{className:"accounts-metadata"},ageMessage&&metadata("ages",ageStatus,ageMessage),priceMessage&&metadata("price",priceStatus,priceMessage)),
+    h("section",{className:"glass-card accounts-card","aria-label":"Accounts and balances"},
+      h("div",{className:"accounts-table-wrap"},h("table",{className:"accounts-table"},
+        h("thead",null,h("tr",null,sortHeader("address","Account","accounts-address-heading"),sortHeader("age","First recorded",""),
+          sortHeader("balance","Balance (XRS)","accounts-number"),h("th",{scope:"col",className:"data-table-header accounts-number"},"Est. value (USD)"))),
+        h("tbody",null,busy&&!ready?h("tr",null,h("td",{colSpan:4},loading("Loading accounts…"))):
+          visible.length?visible.map(([account,raw])=>{
+            const age=ageMap.get(account),usd=views.accountUSD(raw,quote,Date.now());
+            return h("tr",{key:account,className:"data-table-row"},
+              h("td",{className:"accounts-address","data-label":"Account"},h(A,{to:"/account/"+account,className:"font-mono hover:underline"},account)),
+              h("td",{className:"accounts-first-seen","data-label":"First recorded"},age?views.accountFirstSeen(age):ageStatus==="loading"?"Loading…":"Unavailable"),
+              h("td",{className:"accounts-number accounts-balance","data-label":"Balance (XRS)"},window.XerisExplorerFormat(raw,9,9),h("span",{className:"accounts-unit"}," XRS")),
+              h("td",{className:"accounts-number accounts-usd","data-label":"Est. value (USD)"},usd??(priceStatus==="loading"?"Loading…":"Unavailable")));
+          }):h("tr",null,h("td",{colSpan:4,className:"accounts-empty",role:"status"},error||(query?"No accounts match this search.":"No accounts returned for this network.")))))),
+      ready&&h("div",{className:"accounts-pagination"},h("span",null,sorted.length?`${(currentPage-1)*50+1}–${Math.min(currentPage*50,sorted.length)} of ${sorted.length} matching accounts`:"0 matching accounts"),
+        pages>1&&h("div",null,h("button",{type:"button",disabled:currentPage<=1,onClick:()=>setPage(currentPage-1)},"Previous accounts"),
+          h("span",null,`Page ${currentPage} of ${pages}`),h("button",{type:"button",disabled:currentPage>=pages,onClick:()=>setPage(currentPage+1)},"Next accounts")))),
+    api.network==="mainnet"&&h("p",{className:"accounts-price-note"},"Estimated at the current pool price, with xUSDC valued at US$1. Actual trade proceeds vary with fees and price impact."),
+    h("p",{className:"accounts-coverage-note"},"Available accounts on the selected network. First recorded network activity; oldest first by default.")
+  );
+}
+'''
+    code = code[:left] + replacement + code[right:]
+    if code.count(' Back to Rich List') != 1:
+        raise RuntimeError('Expected one account return link label')
+    code = code.replace(' Back to Rich List', ' Back to Accounts', 1)
+    return code, 2

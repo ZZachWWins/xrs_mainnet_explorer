@@ -1,3 +1,4 @@
+import {validateAccountAges, validateAccountPrice} from './accounts.mjs';
 import {NETWORKS, parsePublicJSON, verifyCheckpoint} from './network.mjs';
 
 export class ExplorerError extends Error {
@@ -151,6 +152,11 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
     return value;
   };
   return Object.freeze({network, ready, stats,
+    accountAges: async () => network === 'mainnet'
+      ? validateAccountAges(await read('/history/accounts', {reportError:false}))
+      : {data:[],basis:'unavailable',truncated:false},
+    accountPrice: async () => network === 'mainnet'
+      ? validateAccountPrice(await read('/market/supply', {reportError:false,timeoutMs:supplyTimeoutMs}), now()) : null,
     blocks: async () => {
       const response = await read('/v2/blocks?page=1&page_size=10');
       if (!Array.isArray(response.data)) throw new Error('Invalid blocks response');

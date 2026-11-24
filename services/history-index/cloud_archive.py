@@ -37,6 +37,9 @@ MAX_TIP_LAG = 100
 REFRESH_SECONDS = 5
 OPERATION_SECONDS = 300
 HASH = re.compile(r'^[0-9a-f]{64}$')
+ACCOUNT_QUERY_SECONDS = 2
+ACCOUNT_QUERY_VM_STEPS = 5_000_000
+ACCOUNT = re.compile(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$')
 
 
 class CursorError(ValueError):
@@ -148,8 +151,13 @@ class CloudArchive:
                     and integer(value['revision']) and integer(value['tip_slot'], 1)
                     and type(value['tip_hash']) is str and HASH.fullmatch(value['tip_hash']), 'cursor shape')
             before = value['before']
-            require(integer(before, 1) if kind == 'blocks' else type(before) is list and len(before) == 2
-                    and integer(before[0], 1) and integer(before[1]) and before[1] < 4096, 'cursor position')
+            if kind == 'accounts':
+                require(type(before) is list and len(before) == 2 and integer(before[0], 1)
+                        and type(before[1]) is str and ACCOUNT.fullmatch(before[1])
+                        and before[1] != '1' * 32, 'account cursor position')
+            else:
+                require(integer(before, 1) if kind == 'blocks' else type(before) is list and len(before) == 2
+                        and integer(before[0], 1) and integer(before[1]) and before[1] < 4096, 'cursor position')
         except Exception:
             raise CursorError(400) from None
         anchor = index.block(value['tip_slot'])
@@ -449,6 +457,8 @@ class CloudArchive:
             result = {'generation': generation['id'] if generation else None, 'coverage': coverage}
             if kind == 'coverage':
                 result['data'] = coverage
+            elif kind == 'accounts':
+                result.update(self.accounts(index, coverage, limit, cursor))
             elif kind in ('block', 'transaction'):
                 result['data'] = index.block(identifier) if kind == 'block' else index.transaction(identifier)
             elif kind in ('blocks', 'transactions', 'address'):
@@ -479,6 +489,62 @@ class CloudArchive:
         finally:
             index.close()
 
+    def accounts(self, index, coverage, limit, cursor):
+        """Earliest indexed activity, never inferred wallet creation or balance.
+
+        Query-only on the existing coherent SQLite snapshot. A deterministic VM
+        budget and wall deadline protect the node host from growing scan cost.
+        No public request opens the ledger or materializes an unbounded list.
+        """
+        self.validate_cursor(index, 'accounts', None, cursor)
+        tip, before = coverage['tip'], None
+        if cursor:
+            value = parse(base64.urlsafe_b64decode(cursor + '=' * (-len(cursor) % 4)))
+            tip = {'slot': value['tip_slot'], 'hash': value['tip_hash']}
+            before = value['before']
+        common = {'basis': 'earliest_indexed_activity', 'snapshot_tip': tip}
+        if not tip:
+            return {**common, 'data': [], 'cursor': None, 'truncated': False}
+        deadline, steps = time.monotonic() + ACCOUNT_QUERY_SECONDS, 0
+        def progress():
+            nonlocal steps
+            steps += 1000
+            return int(steps > ACCOUNT_QUERY_VM_STEPS or time.monotonic() >= deadline)
+        index.db.set_progress_handler(progress, 1000)
+        try:
+            rows = index.db.execute('''WITH appearances AS (
+                SELECT a.address,t.slot FROM addresses a JOIN transactions t USING(signature) WHERE t.slot<=?
+                UNION ALL SELECT json_extract(data,'$.proposer'),slot FROM blocks WHERE slot<=?
+              ), first_seen AS (
+                SELECT address,min(slot) AS first_seen_slot FROM appearances
+                WHERE address IS NOT NULL AND address!=? GROUP BY address
+              ) SELECT f.address,f.first_seen_slot,json_extract(b.data,'$.poh_timestamp') AS stamp
+                FROM first_seen f JOIN blocks b ON b.slot=f.first_seen_slot
+                WHERE (? IS NULL OR f.first_seen_slot>? OR (f.first_seen_slot=? AND f.address>?))
+                ORDER BY f.first_seen_slot,f.address LIMIT ?''',
+                (tip['slot'], tip['slot'], '1' * 32,
+                 before[0] if before else None, before[0] if before else None,
+                 before[0] if before else None, before[1] if before else None, limit + 1)).fetchall()
+        finally:
+            index.db.set_progress_handler(None, 0)
+        require(time.monotonic() < deadline, 'account query exceeded time bound')
+        more, data = len(rows) > limit, []
+        for row in rows[:limit]:
+            require(type(row['address']) is str and ACCOUNT.fullmatch(row['address'])
+                    and type(row['first_seen_slot']) is int and 0 < row['first_seen_slot'] <= tip['slot'],
+                    'invalid indexed account appearance')
+            stamp = row['stamp']
+            data.append({'address': row['address'], 'first_seen_slot': row['first_seen_slot'],
+                         'first_seen_timestamp_ms': stamp if type(stamp) is int and 0 < stamp < 2**53 else None})
+        next_cursor = None
+        if more:
+            last = data[-1]
+            value = {'kind': 'accounts', 'address': None, 'revision': int(index.meta('revision') or 0),
+                     'tip_slot': tip['slot'], 'tip_hash': tip['hash'],
+                     'before': [last['first_seen_slot'], last['address']]}
+            next_cursor = base64.urlsafe_b64encode(h.canonical(value).encode()).decode().rstrip('=')
+        return {**common, 'data': data, 'cursor': next_cursor, 'truncated': more}
+
     def dispatch(self, target, method='GET'):
         """Pure request routing, injectable in tests without binding a socket."""
         if method != 'GET':
@@ -500,12 +566,12 @@ class CloudArchive:
                 require(set(params) == {'q'}, 'search query required')
                 result = self.historical('search', params['q'][0])
                 return (404 if result.get('data') is None else 200), result
-            match = re.fullmatch(r'/history/(coverage|blocks|transactions|block|transaction|address)(?:/([A-Za-z0-9_-]{1,128}))?', url.path)
+            match = re.fullmatch(r'/history/(coverage|blocks|transactions|block|transaction|address|accounts)(?:/([A-Za-z0-9_-]{1,128}))?', url.path)
             if not match:
                 return 404, {'error': 'Unknown history endpoint'}
             kind, identifier = match.groups()
             require((identifier is not None) == (kind in ('block', 'transaction', 'address')), 'invalid identifier')
-            require(not params or kind in ('blocks', 'transactions', 'address'), 'cursor not supported')
+            require(not params or kind in ('blocks', 'transactions', 'address', 'accounts'), 'cursor not supported')
             result = self.historical(kind, identifier, cursor=params.get('cursor', [None])[0])
             return (404 if result.get('data') is None else 200), result
         except CursorError as error:

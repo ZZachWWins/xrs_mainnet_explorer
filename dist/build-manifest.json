@@ -4,16 +4,17 @@
   "default_network": "testnet",
   "read_only": true,
   "source_sha256": "89bf6570f6418a00dba59b2b4f6b5a141076e8b5bd95316bd103c14ee7e3df47",
-  "patched_ui_sha256": "f3b6133c27c864e31bd07669ba00d5c7731b4430cf7044c56c81e0da53482987",
-  "asserted_ui_corrections": 134,
+  "patched_ui_sha256": "b084494742e47c2461778b334a57d3ddb89ef7b97cc6e8b032ec87a05b296baf",
+  "asserted_ui_corrections": 130,
   "network_state": "URL query; no persisted data or cross-network fallback",
   "files": {
+    "accounts.mjs": "790637a849d58af6e6541a11f8208a43cbfa719f6108b51c8e8f793e857498a6",
     "assets/explorer-ui.css": "8b0584ef629031c6d226e5a064967b9da8f82045ed72baabdae933a8e35b8f47",
-    "assets/explorer-ui.js": "f3b6133c27c864e31bd07669ba00d5c7731b4430cf7044c56c81e0da53482987",
+    "assets/explorer-ui.js": "b084494742e47c2461778b334a57d3ddb89ef7b97cc6e8b032ec87a05b296baf",
     "bootstrap.mjs": "77722bf99a023d4ca28571992fdedead8c0bbe5c39b186a8ab6f0be158633ca8",
     "connection-recovery.mjs": "bee8b429f2565ee624ddb2fb067ad0feaebf14e6f2395d910ae97d3827a5fa7b",
-    "explorer-api.mjs": "d697d647ed6eba3551591151927b7343f2c30979de0ed0d66194d2a7861dfe55",
-    "explorer.css": "d15725b02011ac25bc38eb72e9f60b10dfa929597b625d208a4a6cc01adade6c",
+    "explorer-api.mjs": "a131c24d3e8937ccd8e803238aa1aabd507e401df4e7d32b06c89456132d89f9",
+    "explorer.css": "bd3948e1b39ab0ad5918d9a9e05a9c53fe5cc1ace8694dbbdb9a95e372456f32",
     "favicon.ico": "d951f8a121c9f65f89fbc992e259559d67862fc6c765e266d9ac26729c442e7d",
     "history-client.mjs": "9a432bf01da4738b7218b87f7b3e31da3d4c395ee82bb3146f6c185c8901fffd",
     "history-views.mjs": "360e743cb75373de9ad2da2bb68f87b747445b131d3f6b5caf058d3d3c59b333",
@@ -22,6 +23,6 @@
     "logos/logolight.png": "36e919d13ff6a0b16265f55e088b705ee26f8e7cb9432173058e49a722e14167",
     "navigation.mjs": "a3d0b5a34dd777881b5606c4d6debb89088e39822df871c20c4832a90fe197b4",
     "network.mjs": "660368250453c9bcc74b7298d767fdb7d41cc61d274340a2005a8613f9e3e87b",
-    "view-loaders.mjs": "6c2ec608ccce65a5db60fd6a2c1e0437f6069256632a006751a197b56f76b15a"
+    "view-loaders.mjs": "df9501c836ff980eeafbedce4f61c88c7005b6dddb54a23fc64d9b37ea9d5a9b"
   }
 }

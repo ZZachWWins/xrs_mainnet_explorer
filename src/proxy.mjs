@@ -8,7 +8,7 @@ const ROUTES = [
   new RegExp(`^/v2/account/${ID}/transactions$`),
   new RegExp(`^/v2/token/${ID}/holders$`),
   new RegExp(`^/v2/contract/${ID}/quote$`),
-  new RegExp(`^/contract/${ID}$`), /^\/balances$/, /^\/market\/supply$/,
+  new RegExp(`^/contract/${ID}$`), /^\/balances$/, /^\/market\/supply$/, /^\/history\/accounts$/,
 ];
 const RPC = new Set(['getSlot', 'getBalance', 'getTransaction', 'getSignaturesForAddress']);
 export async function boundedBody(request, maximumBytes = 8192, timeoutMs = 3000) {
@@ -69,7 +69,8 @@ export function routeRequest(input, method = 'GET', body = null) {
         Object.keys(options).join(',') !== 'limit' || !Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100)) throw new Error('Invalid RPC parameters');
     return {network, url: NETWORKS[network].origin + '/', method, body: JSON.stringify(request)};
   }
-  if (method !== 'GET' || body || !ROUTES.some(r => r.test(path)) || (path === '/market/supply' && network !== 'mainnet')) throw new Error('Read-only explorer route required');
+  if (method !== 'GET' || body || !ROUTES.some(r => r.test(path)) || (['/market/supply', '/history/accounts'].includes(path) && network !== 'mainnet')) throw new Error('Read-only explorer route required');
+  if (path === '/history/accounts' && url.search) throw new Error('Account age lookup does not accept query parameters');
   if (network === 'testnet' && path === '/v2/tokens') {
     if ([...url.searchParams.keys()].some(k => !['limit', 'token_id'].includes(k))) throw new Error('Unsupported legacy registry query');
     return {network, url: NETWORKS[network].origin + path, method: 'GET', body: null,
