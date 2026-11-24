@@ -50,8 +50,11 @@ export function parsePublicJSON(text) {
   return JSON.parse(result);
 }
 export function rawUnits(value, decimals = 9, maximumFractionDigits = 9) {
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) return '—';
   const raw = String(value);
-  if (!/^(0|[1-9]\d*)$/.test(raw) || !Number.isInteger(decimals) || decimals < 0 || decimals > 18) return '—';
+  if (!/^(0|[1-9]\d*)$/.test(raw) || raw.length > 20 || BigInt(raw) > 18446744073709551615n ||
+      !Number.isInteger(decimals) || decimals < 0 || decimals > 18 ||
+      !Number.isInteger(maximumFractionDigits) || maximumFractionDigits < 0 || maximumFractionDigits > 18) return '—';
   const padded = raw.padStart(decimals + 1, '0');
   const whole = decimals ? padded.slice(0, -decimals) : padded;
   const fraction = decimals ? padded.slice(-decimals).slice(0, maximumFractionDigits).replace(/0+$/, '') : '';

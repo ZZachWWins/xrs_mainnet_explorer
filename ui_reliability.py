@@ -129,6 +129,34 @@ def repair_views(code):
     code = one(code, 'children:[(u.amount_xrs!==void 0?u.amount_xrs:u.amount/1e9).toLocaleString(void 0,{maximumFractionDigits:9})," XRS"]', 'children:hs(u)', 'block transaction asset denomination')
     code = one(code, 'children:[(((i=t==null?void 0:t.meta)==null?void 0:i.fee)||(t==null?void 0:t.fee)||1e6)/1e9," XRS"]', 'children:XerisNativeAmount(t?.meta?.fee??t?.fee)??"Unavailable"', 'reported fee only without fabricated default')
 
+    # The original presentation treated a missing outcome as a green success.
+    status_condition = '(t==null?void 0:t.status)==="confirmed"||(t==null?void 0:t.status)==="success"||!(t!=null&&t.status)?"text-green-400":"text-yellow-400"'
+    status_color = 'window.XerisExplorerViews.transactionStatus(t?.status).color'
+    def transaction_status(text):
+        if text.count(status_condition) != 2:
+            raise RuntimeError('Transaction outcome color boundaries changed')
+        text = text.replace(status_condition, status_color)
+        return one(text, 'children:(t==null?void 0:t.status)||"Unknown"', 'children:window.XerisExplorerViews.transactionStatus(t?.status).label', 'explicit transaction outcome labels')
+    view('av', 'Xs', transaction_status)
+
+    code = one(code, '(parseInt(o.max_supply||o.supply)/Math.pow(10,o.decimals||0)).toLocaleString()',
+        'Number.isInteger(o.decimals)?window.XerisExplorerFormat(o.max_supply??o.supply,o.decimals,o.decimals):"Unavailable"', 'exact token maximum supply')
+    code = one(code, 'const x=t.decimals||0,w=S=>(parseInt(S)/Math.pow(10,x)).toLocaleString(),',
+        'const x=Number.isInteger(t.decimals)?t.decimals:null,w=S=>window.XerisExplorerFormat(S,x,x),', 'exact holder token balances')
+    code = one(code, 'function Sc(e,t=9){return e?(Number(e)/Math.pow(10,t)).toLocaleString(void 0,{maximumFractionDigits:2}):"0"}',
+        'function Sc(e,t){const known=Number.isInteger(t)&&t>=0&&t<=18;const amount=window.XerisExplorerFormat(e,known?t:0,known?t:0);return amount==="—"?"Unavailable":amount+(known?"":" raw units")}', 'no guessed pool precision')
+    def pools(text):
+        text = one(text, 'function pv(){const[e,t]', 'function pv(){const[poolError,setPoolError]=v.useState(false);const[e,t]', 'pool error state')
+        text = span(text, 'v.useEffect(()=>{Promise.all([cg(),Ur()])', '},[])',
+            'v.useEffect(()=>window.XerisExplorerViews.loadPoolsView(window.XerisExplorerAPI,{pools:rows=>{t(rows);s(false);setPoolError(false)},error:()=>{t([]);s(false);setPoolError(true)},decimals:r}),[])', 'independent pool and metadata reads')
+        text = one(text, 'Sc(o.reserve_a,n[o.token_a]||9)', 'Sc(o.reserve_a,n[o.token_a])', 'pool A precision')
+        text = one(text, 'Sc(o.reserve_b,n[o.token_b]||6)', 'Sc(o.reserve_b,n[o.token_b])', 'pool B precision')
+        text = one(text, 'l?[...Array(3)].map((o,i)=>a.jsx("div",{className:"glass-card h-32 animate-pulse"},i))', 'l?' + loading('Loading pools…'), 'named pool loading state')
+        text = one(text, 'children:"No Pools Found"', 'children:poolError?"Pool data unavailable":"No Pools Found"', 'pool failure distinct from empty')
+        text = one(text, 'children:"There are currently no active liquidity pools on the network."', 'children:poolError?"Pool records could not be retrieved. Please retry.":"No pool records were returned for this network."', 'pool coverage wording')
+        return text
+    view('pv', 'mv', pools)
+
     fallback = 'a.jsx(Ce,{path:"*",element:a.jsxs("main",{className:"connection-panel",children:[a.jsx("h1",{children:"Page not found"}),a.jsx("p",{children:"This explorer link is unavailable. Check the address or return to the overview."}),a.jsx(A,{to:"/",children:"Back to overview"})]})})'
     code = one(code, 'a.jsx(Ce,{path:"/validators",element:a.jsx(mv,{})})]})', 'a.jsx(Ce,{path:"/validators",element:a.jsx(mv,{})}),' + fallback + ']})', 'unknown-route recovery')
     boundary = 'class XerisExplorerBoundary extends v.Component{constructor(props){super(props);this.state={failed:false}}static getDerivedStateFromError(){return{failed:true}}render(){return this.state.failed?a.jsxs("main",{className:"connection-panel",role:"alert",children:[a.jsx("h1",{children:"This view could not be displayed"}),a.jsx("p",{children:"Please retry the page or return to the overview. No other network was selected."}),a.jsx("button",{type:"button",onClick:()=>location.reload(),children:"Retry page"}),a.jsx("a",{href:"/?network="+window.XerisExplorerAPI.network,children:"Back to overview"})]}):this.props.children}}'

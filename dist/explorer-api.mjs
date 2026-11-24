@@ -15,7 +15,7 @@ export function retryAfterMilliseconds(value, now = Date.now()) {
 export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {}, onNotice = () => {}, now = Date.now, getContext = () => '', readTimeoutMs, supplyTimeoutMs = 2000} = {}) {
   if (!Object.hasOwn(NETWORKS, network)) throw new Error('Unknown network');
   const prefix = `/networks/${network}`;
-  let identity;
+  let identity, bindingFailure;
   const pending = new Map();
   const error = (message, options) => new ExplorerError(message, {network, ...options});
   async function read(path, {identityCheck = false, reportError = true, timeoutMs} = {}) {
@@ -23,6 +23,7 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
     const pendingKey = path + (timeoutMs === undefined ? '' : `|deadline:${timeoutMs}`);
     try {
       if (!identityCheck) await ready();
+      if (bindingFailure) throw bindingFailure;
       if (!pending.has(pendingKey)) {
         const task = (async () => {
           const controller = new AbortController(); let timer;
@@ -60,9 +61,11 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
             catch { throw error('Invalid public response', {code: 'INVALID_RESPONSE'}); }
             if (!result || typeof result !== 'object' || Array.isArray(result)) throw error('Invalid public response', {code: 'INVALID_RESPONSE'});
             if (result.success === false || result.error) throw error(`${NETWORKS[network].name}: requested record is unavailable`, {code: 'RECORD_UNAVAILABLE'});
+            if (bindingFailure) throw bindingFailure;
             return result;
           } catch (cause) {
             if (reader) void reader.cancel().catch(() => {});
+            if (cause?.code === 'NETWORK_MISMATCH') bindingFailure = cause;
             if (cause instanceof ExplorerError) throw cause;
             throw error(`${NETWORKS[network].name}: this data is currently unavailable`, {code: controller.signal.aborted ? 'TIMEOUT' : 'TRANSPORT_ERROR', retryable: true});
           } finally { clearTimeout(timer); }
@@ -71,13 +74,16 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
         // Delete before a later explicit retry; no settled response cache.
         task.then(() => { if (pending.get(pendingKey) === task) pending.delete(pendingKey); }, () => { if (pending.get(pendingKey) === task) pending.delete(pendingKey); });
       }
-      return await pending.get(pendingKey);
+      const result = await pending.get(pendingKey);
+      if (bindingFailure) throw bindingFailure;
+      return result;
     } catch (cause) {
       if (reportError) onError(cause.message, context, cause);
       throw cause;
     }
   }
   function ready() {
+    if (bindingFailure) return Promise.reject(bindingFailure);
     if (!identity) {
       const attempt = read(`/v2/block/slot/${NETWORKS[network].checkpointSlot}`, {identityCheck: true, reportError: false})
         .then(value => {
@@ -96,12 +102,12 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
     const rows = []; let after = null; const seen = new Set();
     for (let page = 0; page < 20; page++) {
       const response = await read(path + '?limit=100' + (after ? '&after=' + encodeURIComponent(after) : ''));
-      if (!Array.isArray(response[key])) throw new Error('Invalid list response');
+      if (!Array.isArray(response[key]) || response[key].length > 100) throw new Error('Invalid or oversized list response');
       rows.push(...response[key]);
       if (response.truncated === true) onNotice(`Showing ${response[key].length} core and recent tokens from ${Number(response.total).toLocaleString()} registered tokens. Direct token links open exact records.` +
         (response.omitted_count ? ` ${response.omitted_count} historical records are unavailable in this view.` : ''), context);
       if (!response.next_after) return rows;
-      if (typeof response.next_after !== 'string' || seen.has(response.next_after)) throw new Error('Incomplete list response');
+      if (typeof response.next_after !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(response.next_after) || seen.has(response.next_after)) throw new Error('Incomplete list response');
       after = response.next_after; seen.add(after);
     }
     throw new Error('List exceeds the explorer display limit');
@@ -124,29 +130,40 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
         result.total_mined_raw = feed.mining?.total_mined_raw;
       } catch { /* Supply stays unavailable; never substitute a token cap. */ }
     }
+    if (bindingFailure) throw bindingFailure;
     return result;
   }
   function normalizeBlock(block) {
     return block && {...block, transactions: block.transactions || block.txs || [],
       tx_count: block.transaction_count ?? block.tx_count ?? (block.transactions || block.txs || []).length};
   }
+  const matchingRecord = (value, field, wanted) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value[field] !== wanted)
+      throw error('The returned record does not match this page', {code: 'RECORD_MISMATCH'});
+    return value;
+  };
   return Object.freeze({network, ready, stats,
     blocks: async () => {
       const response = await read('/v2/blocks?page=1&page_size=10');
       if (!Array.isArray(response.data)) throw new Error('Invalid blocks response');
       return response.data.map(normalizeBlock);
     },
-    block: async (slot, {optional = false} = {}) => normalizeBlock((await read(`/v2/block/slot/${encodeURIComponent(slot)}`, optional ? {reportError: false, timeoutMs: 2000} : {})).data),
+    block: async (slot, {optional = false} = {}) => {
+      if (!/^\d{1,16}$/.test(String(slot)) || !Number.isSafeInteger(Number(slot))) throw error('Invalid block slot', {code: 'INVALID_IDENTIFIER'});
+      const value = (await read(`/v2/block/slot/${Number(slot)}`, optional ? {reportError: false, timeoutMs: 2000} : {})).data;
+      return normalizeBlock(matchingRecord(value, 'slot', Number(slot)));
+    },
     transactions: async (page = 1, pageSize = 20) => read(`/v2/transactions?page=${page}&page_size=${pageSize}`),
-    transaction: async signature => (await read(`/v2/tx/${encodeURIComponent(signature)}`)).data,
-    account: async address => (await read(`/v2/account/${encodeURIComponent(address)}`)).data,
+    transaction: async signature => matchingRecord((await read(`/v2/tx/${encodeURIComponent(signature)}`)).data, 'signature', signature),
+    account: async address => matchingRecord((await read(`/v2/account/${encodeURIComponent(address)}`)).data, 'address', address),
     accountTransactions: async (address, page = 1, pageSize = 20) => read(`/v2/account/${encodeURIComponent(address)}/transactions?page=${page}&page_size=${pageSize}`),
     validators: async () => (await read('/v2/validators')).data,
     search: async value => (await read(`/v2/search?q=${encodeURIComponent(value)}`)).data,
     balances: async () => {
       const result = await read('/balances');
       if (!result || Array.isArray(result) || Object.entries(result).some(([address, value]) =>
-          !/^[A-Za-z0-9_-]{1,128}$/.test(address) || !/^(0|[1-9]\d*)$/.test(String(value)))) throw new Error('Invalid balance map');
+          !/^[A-Za-z0-9_-]{1,128}$/.test(address) || typeof value === 'number' && !Number.isSafeInteger(value) ||
+          !/^(0|[1-9]\d{0,19})$/.test(String(value)) || BigInt(value) > 18446744073709551615n)) throw new Error('Invalid balance map');
       return result;
     },
     tokens: () => list('/v2/tokens'),

@@ -4,21 +4,21 @@
   "default_network": "testnet",
   "read_only": true,
   "source_sha256": "89bf6570f6418a00dba59b2b4f6b5a141076e8b5bd95316bd103c14ee7e3df47",
-  "patched_ui_sha256": "507d759abeef892ec369d0ef10b5c4b185d3975a1016cdf4e5e35b5c311ba7f9",
-  "asserted_ui_corrections": 94,
+  "patched_ui_sha256": "529348cf9f366ffe3bfd5db42d35d869817411abb3e0e44c0c37e2ffa02fb1a4",
+  "asserted_ui_corrections": 105,
   "network_state": "URL query; no persisted data or cross-network fallback",
   "files": {
     "assets/explorer-ui.css": "8b0584ef629031c6d226e5a064967b9da8f82045ed72baabdae933a8e35b8f47",
-    "assets/explorer-ui.js": "507d759abeef892ec369d0ef10b5c4b185d3975a1016cdf4e5e35b5c311ba7f9",
+    "assets/explorer-ui.js": "529348cf9f366ffe3bfd5db42d35d869817411abb3e0e44c0c37e2ffa02fb1a4",
     "bootstrap.mjs": "42c728f9c2c267afe461f3aac42f2e7e5c4f19f0f5ee4b361e92dac8e9acb27b",
-    "explorer-api.mjs": "d6cf4fe0396e45ad6bf10775c35d9f30937ef526979212994db4a9b2b834e2d2",
+    "explorer-api.mjs": "d70676fcd87273cd8369582bd7224ccffcf9bc844696481c009ba28d6aa527e1",
     "explorer.css": "b74231da6a5f4cc9c2d295febb4e3ae9662c8715197c609251e2270770310d1b",
     "favicon.ico": "d951f8a121c9f65f89fbc992e259559d67862fc6c765e266d9ac26729c442e7d",
     "index.html": "be6e2afe4fedec47ec05f2bd75925561e582563d6fa9665860ac1a5112aa10ee",
     "logos/logodark.png": "63cffb851db33a2aae86e371fadcb60b437399ef233652859476b3138837caf7",
     "logos/logolight.png": "36e919d13ff6a0b16265f55e088b705ee26f8e7cb9432173058e49a722e14167",
     "navigation.mjs": "b4983d59bf91ab9d46cbf3ab834153ad46dc7dfca16e46370e6c47b15cdc44aa",
-    "network.mjs": "8d5361368e777b3ad5374974fcdd95448821bf652a0771b34f2e3048f561de46",
-    "view-loaders.mjs": "f3da2534e5c5b6a943fd3d7dad573493df54b7fcacd20755384e56f8c8fd9036"
+    "network.mjs": "660368250453c9bcc74b7298d767fdb7d41cc61d274340a2005a8613f9e3e87b",
+    "view-loaders.mjs": "6c2ec608ccce65a5db60fd6a2c1e0437f6069256632a006751a197b56f76b15a"
   }
 }
