@@ -2,6 +2,8 @@ import {NETWORKS, selectedNetwork, networkLink, rawUnits} from './network.mjs';
 import {createExplorerAPI} from './explorer-api.mjs';
 import * as views from './view-loaders.mjs';
 import {createNavigation} from './navigation.mjs';
+import {createHistoryClient} from './history-client.mjs';
+import {createHistoryViews} from './history-views.mjs';
 
 const status = document.getElementById('network-status');
 const notice = document.getElementById('data-notice');
@@ -61,7 +63,9 @@ if (network) {
   window.XerisExplorerAPI = api;
   window.XerisExplorerFormat = rawUnits;
   window.XerisExplorerViews = views;
-  window.XerisExplorerNavigation = createNavigation;
+  window.XerisExplorerNavigation = (...args) => createNavigation(...args, {network});
+  const historyClient = createHistoryClient(network);
+  window.XerisExplorerHistory = (React, Link, useLocation) => createHistoryViews(React, Link, useLocation, historyClient);
   const originalPush = history.pushState.bind(history);
   const originalReplace = history.replaceState.bind(history);
   for (const [method, original] of [['pushState', originalPush], ['replaceState', originalReplace]]) {

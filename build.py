@@ -2,7 +2,8 @@
 
 Keep vendor/ byte-for-byte; scoped asserted transforms repair the data boundary
 and known inaccurate labels/defaults. The original editable React source was
-not included in the supplied deployment. No dependency download is required.
+not included in the supplied deployment. The static UI build needs no downloads;
+the Netlify history Function uses the pinned SDK dependency.
 """
 import hashlib
 import json
@@ -23,7 +24,7 @@ def build():
     shutil.copytree(VENDOR / 'logos', DIST / 'logos', dirs_exist_ok=True)
     shutil.copyfile(VENDOR / 'favicon.ico', DIST / 'favicon.ico')
     shutil.copyfile(VENDOR / 'assets/index-bamvo4ap.css', DIST / 'assets/explorer-ui.css')
-    for filename in ('network.mjs', 'explorer-api.mjs', 'bootstrap.mjs', 'explorer.css', 'view-loaders.mjs', 'navigation.mjs'):
+    for filename in ('network.mjs', 'explorer-api.mjs', 'bootstrap.mjs', 'explorer.css', 'view-loaders.mjs', 'navigation.mjs', 'history-client.mjs', 'history-views.mjs'):
         shutil.copyfile(ROOT / 'src' / filename, DIST / filename)
     original = (VENDOR / 'assets/index-xu2oldtt.js').read_text()
     start, end = original.index(',vc=new Map;'), original.index('function hs(e)')
@@ -99,6 +100,31 @@ def build():
         token_ui = token_ui.replace(before, after)
     code = code[:token_start] + token_ui + code[token_end:]
     code, reliability_count = repair_views(code)
+    # Keep the live account balance view; Mainnet gets a separate archive link.
+    account_start, account_end = code.index('function ov('), code.index('function iv(')
+    account_ui = code[account_start:account_end]
+    history_heading = 'a.jsxs("h2",{className:"text-lg mb-6 flex items-center gap-2 text-white",children:[a.jsx(gc,{size:18,className:"text-brand-vibrant"}),"Transaction History"]})'
+    history_link = 'window.XerisExplorerAPI.network==="mainnet"&&a.jsx(A,{to:`/history/address/${e}`,className:"inline-block mb-6 text-brand-vibrant hover:underline",children:"Address history"})'
+    if account_ui.count(history_heading) != 1: raise RuntimeError('Account history link boundary changed')
+    account_ui = account_ui.replace(history_heading, history_heading + ',' + history_link)
+    code = code[:account_start] + account_ui + code[account_end:]
+    # Readable archive views wrap only Mainnet history routes; Testnet keeps the
+    # recovered components. Every transform asserts its original boundary.
+    routes = {
+        'path:"/transactions",element:a.jsx(rv,{})': 'path:"/transactions",element:a.jsx(XerisHistoryRoute,{kind:"transactions",Fallback:rv})',
+        'path:"/block/:slot",element:a.jsx(sv,{})': 'path:"/block/:slot",element:a.jsx(XerisHistoryRoute,{kind:"block",Fallback:sv})',
+        'path:"/tx/:signature",element:a.jsx(av,{})': 'path:"/tx/:signature",element:a.jsx(XerisHistoryRoute,{kind:"transaction",Fallback:av})',
+    }
+    for before, after in routes.items():
+        if code.count(before) != 1: raise RuntimeError('Archive route boundary changed: ' + before)
+        code = code.replace(before, after)
+    extra = ','.join('a.jsx(Ce,{path:' + json.dumps(path) + ',element:a.jsx(XerisHistoryRoute,{kind:' + json.dumps(kind) + '})})'
+        for path, kind in [('/history','blocks'),('/history/blocks','blocks'),('/history/transactions','transactions'),
+            ('/history/block/:id','block'),('/history/transaction/:id','transaction'),('/history/address/:id','address')])
+    anchor = 'a.jsxs(Wh,{children:['
+    if code.count(anchor) != 1: raise RuntimeError('Archive router boundary changed')
+    code = code.replace(anchor, anchor + extra + ',')
+    code = code.replace('function hv(){', 'const XerisHistoryRoute=window.XerisExplorerHistory(v,A,Dr);function hv(){', 1)
     (DIST / 'assets/explorer-ui.js').write_text(code)
     (DIST / 'index.html').write_text('''<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">

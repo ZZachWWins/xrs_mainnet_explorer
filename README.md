@@ -4,7 +4,7 @@ Public, read-only explorer prepared for `ZZachWWins/xrs_mainnet_explorer` and Ne
 
 ## Run and deploy
 
-Requirements: Node 20+ and Python 3. No package installation, account credentials, signing keys, database, or secret environment variables are required.
+Requirements: Node 22.12+ and Python 3. Netlify installs the pinned public dependencies for the Blobs Function; use `npm ci --ignore-scripts` to install them locally when needed. The static build, plain local preview and offline tests need no account credentials, signing keys, database, or secret environment variables.
 
 ```sh
 python3 build.py
@@ -18,7 +18,7 @@ To switch the launch default later, edit the single `DEFAULT_NETWORK` constant i
 
 ## Data boundaries
 
-The browser contacts only same-origin `/networks/<network>/…`. The Netlify function and local preview use the same fixed route validator. They permit only bounded explorer GET routes and an explicit read-only RPC method list. They reject write methods, unknown networks, arbitrary upstream URLs, excessive pagination, and redirects; they do not forward browser credentials. Responses have `Cache-Control: no-store` and an explicit network header. Failed reads never fall back to another chain or fabricate an empty successful response.
+Live browser reads use same-origin `/networks/<network>/…`; Mainnet archive reads use same-origin `/api/history/…`. The live Netlify function and local preview use the same fixed route validator. They permit only bounded explorer GET routes and an explicit read-only RPC method list. They reject write methods, unknown networks, arbitrary upstream URLs, excessive pagination, and redirects; they do not forward browser credentials. Responses have `Cache-Control: no-store` and an explicit network header. Failed reads never fall back to another chain or fabricate an empty successful response.
 
 Before loading the interface, each network must match its independently checked slot 27201 checkpoint:
 
@@ -62,3 +62,48 @@ Detail reads now bind the returned block slot, transaction signature and account
 Unknown transaction outcomes are neutral; failed and partially executed transactions have distinct labels. Token maxima, holder balances and pool reserves use exact integer formatting. Zero-decimal tokens are supported, and unavailable token precision is displayed explicitly as raw units. Optional token metadata failures no longer erase real pool records or produce a false “No Pools Found” result. Pool loading and errors are named separately from empty results.
 
 These checks are application-level verification, not a CertiK audit or proof of chain consensus. The known HTTP hop to the legacy Testnet node and the limited registry/history coverage remain infrastructure/indexing follow-ups. No node, consensus, signer or key material is included in these changes.
+
+
+## Mainnet archive integration (prepared; store activation required)
+
+The Netlify `history` Function serves read-only `/api/history/*` routes from the
+fixed `xeris-mainnet-v4` Blobs namespace. It imports the reviewed archive adapter
+and API without modifying them. `@netlify/blobs` is pinned to 11.1.11 in the lockfile;
+Node 24 is selected for the build. Netlify Functions provide their Blobs site/auth
+context automatically. No token belongs in the browser bundle or repository.
+
+Mainnet navigation includes History. Numeric block and signature searches keep the
+existing block and transaction routes, which retain their live fallback. Address
+searches keep the live account balance view, with a separate Address history link.
+Block-hash searches use the archive-only route. Mainnet block, transaction and transaction-list links
+activate archive views only after a valid chain-bound coverage response. Unpublished
+or unavailable coverage explicitly falls back to the live endpoint's recent view.
+An activated archive returning 404 stays “record not in this archive”; it never
+silently substitutes another endpoint or claims an empty complete history. Explicit
+live-record links remain available. Testnet is still the default and never contacts
+the Mainnet archive. Coverage, captured tip and gaps remain visible on archive views;
+newer activity may be outside that snapshot. Archive loading states reuse the named
+loading circle. Each mounted archive view retains at most 20 recently used pages;
+evicted pages are fetched again when revisited. Cursor continuation retains its immutable
+generation. Existing account/balance, token, pool, validator and contract views remain
+on the selected network's live API.
+
+The public store must be uploaded and its generation activated separately before
+history becomes public. This source change does not upload, activate, or claim that
+an archive is online. The plain local preview deliberately returns an unpublished
+archive response without inspecting Netlify credentials. Root review and actual
+Netlify verification remain required before publication.
+
+Validation: `python3 build.py` followed by `npm test`. The integration suite covers
+unpublished manifests, fixed-network routing, rejected write requests, coverage
+validation, unavailable fallback, old transaction misses, stale route cancellation,
+search routing, view rendering and dependency pinning. A local fixture using the
+verified public export also exercised the Function, client, all 477 block pages and
+16 transaction lookups without network/storage writes. Visual browser QA was not
+available because desktop browser attachment required network-policy support.
+
+Current primary references:
+- [Netlify Blobs](https://docs.netlify.com/build/data-and-storage/netlify-blobs/)
+- [Functions API](https://docs.netlify.com/build/functions/api/)
+- [Function routing and Node runtime](https://docs.netlify.com/build/functions/configuration/)
+- [Published SDK metadata](https://registry.npmjs.org/@netlify%2fblobs/11.1.11)

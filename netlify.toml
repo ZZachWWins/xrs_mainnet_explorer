@@ -2,9 +2,18 @@
   command = "python3 build.py"
   publish = "dist"
 
+[build.environment]
+  NODE_VERSION = "24"
+
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/history/*"
+  to = "/.netlify/functions/history/:splat"
+  status = 200
+  force = true
 
 [[redirects]]
   from = "/networks/*"
@@ -28,5 +37,10 @@
 
 [[headers]]
   for = "/networks/*"
+  [headers.values]
+    Cache-Control = "no-store, max-age=0"
+
+[[headers]]
+  for = "/api/history/*"
   [headers.values]
     Cache-Control = "no-store, max-age=0"

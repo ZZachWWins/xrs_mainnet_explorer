@@ -1,24 +1,28 @@
 const PUBLIC_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]+$/;
-export function searchDestination(value, scope = 'auto') {
-  const text = value.trim();
+export function searchDestination(value, scope = 'auto', {history = false} = {}) {
+  let text = value.trim();
+  const blockHash = history && /^[0-9a-fA-F]{64}$/.test(text);
+  if (blockHash) text = text.toLowerCase();
   if (!text || text.length > 128) throw new Error('Enter a block slot, wallet address, transaction signature or token ID.');
   if (scope === 'auto') {
-    if (/^\d+$/.test(text)) scope = 'block';
+    if (blockHash || /^\d+$/.test(text)) scope = 'block';
     else if (BASE58.test(text) && text.length >= 85 && text.length <= 88) scope = 'tx';
     else if (BASE58.test(text) && text.length >= 32 && text.length <= 44) scope = 'account';
     else if (text.includes('_')) scope = 'token';
     else if (text.includes('-')) scope = 'contract';
     else throw new Error('Choose a search type for this identifier.');
   }
-  if (scope === 'block' && (!/^\d{1,16}$/.test(text) || BigInt(text) > BigInt(Number.MAX_SAFE_INTEGER))) throw new Error('Enter a valid numeric block slot.');
+  if (scope === 'block' && !blockHash && (!/^\d{1,16}$/.test(text) || BigInt(text) > BigInt(Number.MAX_SAFE_INTEGER))) throw new Error('Enter a valid numeric block slot.');
   if (scope === 'account' && (!BASE58.test(text) || text.length < 32 || text.length > 44)) throw new Error('Enter a valid Xeris wallet address.');
   if (scope === 'tx' && (!BASE58.test(text) || text.length < 85 || text.length > 88)) throw new Error('Enter a complete transaction signature.');
   if (!['block', 'account', 'tx', 'token', 'contract'].includes(scope) || !PUBLIC_ID.test(text)) throw new Error('This identifier is not supported.');
+  if (scope === 'block' && blockHash) return `/history/block/${text}`;
   return `/${scope}/${encodeURIComponent(scope === 'block' ? String(BigInt(text)) : text)}`;
 }
 
 export function activeSection(pathname) {
+  if (pathname === '/history' || pathname.startsWith('/history/')) return '/history';
   if (pathname === '/' || /^\/block\/[^/]+$/.test(pathname)) return '/';
   for (const [section, detail] of [['/transactions', 'tx'], ['/balances', 'account'], ['/tokens', 'token'], ['/contracts', 'contract']]) {
     if (pathname === section || new RegExp(`^/${detail}/[^/]+$`).test(pathname)) return section;
@@ -26,10 +30,11 @@ export function activeSection(pathname) {
   return ['/pools', '/validators', '/stats'].includes(pathname) ? pathname : null;
 }
 
-export function createNavigation(React, Link, useLocation, useNavigate) {
+export function createNavigation(React, Link, useLocation, useNavigate, {network = 'testnet'} = {}) {
   const h = React.createElement;
   const links = [['/', 'Overview'], ['/transactions', 'Transactions'], ['/balances', 'Accounts'], ['/tokens', 'Tokens'],
     ['/pools', 'Pools'], ['/contracts', 'Contracts'], ['/validators', 'Validators'], ['/stats', 'Network']];
+  if (network==='mainnet') links.splice(1,0,['/history','History']);
   return function Navigation() {
     const location = useLocation(), navigate = useNavigate();
     const [open, setOpen] = React.useState(false), [query, setQuery] = React.useState(''),
@@ -53,7 +58,7 @@ export function createNavigation(React, Link, useLocation, useNavigate) {
     }
     function submit(event) {
       event.preventDefault();
-      try {navigate(searchDestination(query, scope));setError('');setQuery('');setOpen(false);}
+      try {navigate(searchDestination(query, scope, {history: network==='mainnet'}));setError('');setQuery('');setOpen(false);}
       catch (failure) {setError(failure.message);}
     }
     return h('header', {className:'explorer-header',onKeyDown:closeMenu},

@@ -71,7 +71,7 @@ test('built skip targets remain after navigation for every route and reachable d
   const source=await readFile(new URL('../dist/assets/explorer-ui.js',import.meta.url),'utf8');
   const start=source.indexOf('function hv(){'),end=source.indexOf('class XerisExplorerBoundary',start);assert.ok(start>=0&&end>start);
   const jsx=(type,props)=>({type,props});
-  const names=['Zh','ev','Wh','Ce','tv','nv','rv','lv','sv','av','ov','iv','cv','uv','dv','pv','mv','A'];
+  const names=['Zh','ev','Wh','Ce','tv','nv','rv','lv','sv','av','ov','iv','cv','uv','dv','pv','mv','A','XerisHistoryRoute'];
   const shell=Function('a',...names,source.slice(start,end)+';return hv;')({jsx,jsxs:jsx},...names.map(name=>name))();
   const children=shell.props.children.props.children;
   assert.equal(children.length,2);assert.equal(children[0].type,'ev');
