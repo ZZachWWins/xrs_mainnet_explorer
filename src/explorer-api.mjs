@@ -15,7 +15,7 @@ export function retryAfterMilliseconds(value, now = Date.now()) {
 export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {}, onNotice = () => {}, now = Date.now, getContext = () => '', readTimeoutMs, supplyTimeoutMs = 2000} = {}) {
   if (!Object.hasOwn(NETWORKS, network)) throw new Error('Unknown network');
   const prefix = `/networks/${network}`;
-  let identity, bindingFailure;
+  let identity, bindingFailure, lastSupply;
   const pending = new Map();
   const error = (message, options) => new ExplorerError(message, {network, ...options});
   async function read(path, {identityCheck = false, reportError = true, timeoutMs} = {}) {
@@ -122,13 +122,21 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
         if (feed.schema_version !== '2' || feed.chain_id !== 'xeris-mainnet-v4' || feed.status !== 'ready' ||
             feed.supply?.basis !== 'unlocked_on_chain_v2' || !/^[0-9]+$/.test(feed.supply?.circulating_raw) ||
             !/^[0-9]+$/.test(feed.expires_at_ms) || BigInt(feed.expires_at_ms) <= BigInt(now())) throw new Error('Live circulating supply unavailable');
-        const expires = BigInt(feed.expires_at_ms);
+        lastSupply = {raw: feed.supply.circulating_raw, expires: BigInt(feed.expires_at_ms),
+          observedAt: feed.observed_at, mined: feed.mining?.total_mined_raw};
+      } catch (cause) {
+        // A brief transport failure must not erase an observation that is still
+        // within its original validity period. Invalid data is never retained.
+        if (!(cause instanceof ExplorerError && cause.retryable)) lastSupply = undefined;
+      }
+      if (lastSupply && BigInt(now()) < lastSupply.expires) {
+        const observed = lastSupply;
         Object.defineProperty(result, 'circulating_supply', {enumerable: true,
-          get: () => BigInt(now()) < expires ? feed.supply.circulating_raw : undefined});
-        result.supply_observed_at = feed.observed_at;
+          get: () => BigInt(now()) < observed.expires ? observed.raw : undefined});
+        result.supply_observed_at = observed.observedAt;
         // Gross emitted amount is not labelled circulating or outstanding supply.
-        result.total_mined_raw = feed.mining?.total_mined_raw;
-      } catch { /* Supply stays unavailable; never substitute a token cap. */ }
+        result.total_mined_raw = observed.mined;
+      } else lastSupply = undefined;
     }
     if (bindingFailure) throw bindingFailure;
     return result;
@@ -174,7 +182,7 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
     },
     holders: id => list(`/v2/token/${encodeURIComponent(id)}/holders`, 'holders'),
     contracts: () => list('/v2/contracts', 'contracts'),
-    contract: async id => normalizeContract((await read(network === 'mainnet' ? `/contract/${encodeURIComponent(id)}` : `/v2/contract/${encodeURIComponent(id)}`)), id),
+    contract: async id => normalizeContract((await read(`/v2/contract/${encodeURIComponent(id)}`)), id),
     quote: async (id, token, amount) => (await read(`/v2/contract/${encodeURIComponent(id)}/quote?input_token=${encodeURIComponent(token)}&amount=${encodeURIComponent(amount)}`)).quote,
     pools: () => list('/v2/pools', 'pools'),
   });

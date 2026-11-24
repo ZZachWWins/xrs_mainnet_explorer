@@ -225,11 +225,11 @@ test('raw same-network Swap contract maps to the recovered UI without inventing 
   assert.throws(() => normalizeContract(response, 'other-pool'));
   assert.throws(() => normalizeContract({...response, contract: {...response.contract, state: {Swap: {...state, fee_bps: 10000}}}}, 'pool'));
 });
-test('mainnet contract detail uses existing raw route on the same network', async () => {
-  const fixture = apiFixture('mainnet', {'/contract/pool': {contract: {contract_id: 'pool', owner: 'owner', contract_type: 'Other', state: {Other: {value: 'raw'}}}}});
+test('mainnet contract detail uses the bounded explorer route on the same network', async () => {
+  const fixture = apiFixture('mainnet', {'/v2/contract/pool': {contract: {contract_id: 'pool', owner: 'owner', contract_type: 'Other', state: {Other: {value: 'raw'}}}}});
   const result = await createExplorerAPI('mainnet', fixture).contract('pool');
   assert.equal(result.contract_type, 'Recorded contract');
-  assert.equal(fixture.calls.at(-1), '/networks/mainnet/contract/pool');
+  assert.equal(fixture.calls.at(-1), '/networks/mainnet/v2/contract/pool');
 });
 test('Testnet contract list uses the real contracts envelope key', async () => {
   const fixture = apiFixture('testnet', {'/v2/contracts?limit=100': {success: true, contracts: [{contract_id: 'test-contract'}], count: 1}});

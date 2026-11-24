@@ -173,4 +173,85 @@ def repair_views(code):
     boundary = boundary.replace('className:"connection-panel",role:"alert"', 'id:"explorer-content",tabIndex:-1,className:"connection-panel",role:"alert"')
     mount = 'Gs.createRoot(document.getElementById("root")).render(a.jsx(Fc.StrictMode,{children:a.jsx(hv,{})}));'
     code = one(code, mount, boundary + 'Gs.createRoot(document.getElementById("root")).render(a.jsx(Fc.StrictMode,{children:a.jsx(XerisExplorerBoundary,{children:a.jsx(hv,{})})}));', 'render failure recovery boundary')
+    code, mainnet_assertions = repair_mainnet_views(code)
+    return code, asserted + mainnet_assertions
+
+
+def repair_mainnet_views(code):
+    """Small asserted presentation fixes, also independently testable in memory."""
+    asserted = 0
+
+    def one(text, before, after, label):
+        nonlocal asserted
+        count = text.count(before)
+        if count != 1:
+            raise RuntimeError(f'{label}: expected one match, found {count}')
+        asserted += 1
+        return text.replace(before, after, 1)
+
+    def view(name, following, transform):
+        nonlocal code
+        start, end = f'function {name}(', f'function {following}('
+        if code.count(start) != 1 or code.count(end) != 1:
+            raise RuntimeError(f'{name}: view boundary changed')
+        left, right = code.index(start), code.index(end, code.index(start))
+        code = code[:left] + transform(code[left:right]) + code[right:]
+
+    def loading(message):
+        return 'a.jsxs("div",{className:"view-loading",role:"status","aria-live":"polite",children:[a.jsx("span",{className:"loading-circle","aria-hidden":true}),a.jsx("span",{children:"' + message + '"})]})'
+
+    def accounts(text):
+        text = one(text, 'function nv(){const[e,t]', 'function nv(){const[accountsError,setAccountsError]=v.useState(null),[accountsReady,setAccountsReady]=v.useState(false),[accountsAttempt,setAccountsAttempt]=v.useState(0);const[e,t]', 'accounts explicit state')
+        text = one(text, 'v.useEffect(()=>{uf().then(g=>{t(g),r(!1)}).catch(g=>{console.error(g),r(!1)}),void 0},[])',
+            'v.useEffect(()=>{let alive=true;r(true);setAccountsError(null);Promise.resolve().then(()=>uf()).then(rows=>{if(alive){t(rows);setAccountsReady(true);r(false)}}).catch(()=>{if(alive){setAccountsError("Accounts data is unavailable. Please retry.");r(false)}});return()=>{alive=false}},[accountsAttempt])', 'accounts load lifetime and retry')
+        text = one(text, 'a.jsx("section",{className:"glass-card",children:',
+            'accountsReady&&accountsError&&a.jsx("p",{role:"status",children:accountsError+" Showing the previous successful result."}),accountsReady&&n&&' + loading('Refreshing accounts…') + ',a.jsx("button",{type:"button",disabled:n,onClick:()=>setAccountsAttempt(value=>value+1),className:"mb-4 text-brand-vibrant hover:underline",children:accountsError?"Retry accounts":"Refresh accounts"}),a.jsx("section",{className:"glass-card",children:', 'accounts refresh and retained-data notice')
+        start = text.index('n?[...Array(12)]')
+        end = text.index(':x.map(', start) + len(':x.map(')
+        text = one(text, text[start:end], 'n&&!accountsReady?a.jsx("tr",{children:a.jsx("td",{colSpan:3,children:' + loading('Loading accounts…') + '})}):x.length?x.map(', 'accounts named loading')
+        text = one(text, ']},g))})]})', ']},g)):a.jsx("tr",{children:a.jsx("td",{colSpan:3,className:"p-8 text-center text-text-dim",role:"status",children:accountsError|| (l?"No accounts match this search.":"No accounts returned for this network.")})})})]})', 'accounts empty distinct from error')
+        text = one(text, '(y/1e9).toLocaleString(void 0,{maximumFractionDigits:0})', 'window.XerisExplorerFormat(y,9,9)', 'accounts exact native balances')
+        return text
+    view('nv', 'rv', accounts)
+
+    def registry(text, name, call, label):
+        text = one(text, f'function {name}(){{const[e,t]', f'function {name}(){{const[listAttempt,setListAttempt]=v.useState(0);const[e,t]', label + ' retry state')
+        text = one(text, f'v.useEffect(()=>{{{call}().then(o=>{{t(o||[]),r(!1)}}).catch(o=>{{console.error(o),s("Failed to fetch {label}"),r(!1)}})}},[])',
+            f'v.useEffect(()=>{{let alive=true;r(true);s(null);Promise.resolve().then(()=>{call}()).then(rows=>{{if(alive){{t(rows);r(false)}}}}).catch(()=>{{if(alive){{s("{label.capitalize()} data is unavailable. Please retry.");r(false)}}}});return()=>{{alive=false}}}},[listAttempt])', label + ' lifetime and retry')
+        text = one(text, f'a.jsx("div",{{className:"text-white text-center py-20",children:"Loading {label}..."}})', loading('Loading ' + label + '…'), label + ' named loading')
+        text = one(text, 'a.jsx("div",{className:"text-red-400 text-center py-20",children:l})', 'a.jsxs("div",{className:"text-center py-20",children:[a.jsx("p",{role:"status",className:"text-red-400",children:l}),a.jsx("button",{type:"button",className:"mt-4 text-brand-vibrant hover:underline",onClick:()=>setListAttempt(value=>value+1),children:"Retry ' + label + '"})]})', label + ' retry control')
+        return text
+    view('iv', 'cv', lambda text: registry(text, 'iv', 'Ur', 'tokens'))
+    view('uv', 'dv', lambda text: registry(text, 'uv', 'ag', 'contracts'))
+
+    helpers = '''function XerisOwnerAddress(value){if(typeof value!=="string"||!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value))return false;const alphabet="123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";let number=0n;for(const char of value)number=number*58n+BigInt(alphabet.indexOf(char));return value.match(/^1*/)[0].length+(number===0n?0:Math.ceil(number.toString(16).length/2))===32}
+function XerisRawUnits(value){const text=window.XerisExplorerFormat(value,0,0);return text==="—"?"Unavailable":text+" raw units"}
+function XerisPoolFee(value){return Number.isInteger(value)&&value>=0&&value<10000?(value/100).toFixed(2)+"%":"Unavailable"}
+function XerisPoolPrice(pool,decimals){const a=decimals[pool.token_a],b=decimals[pool.token_b];if(![a,b].every(value=>Number.isInteger(value)&&value>=0&&value<=18)||window.XerisExplorerFormat(pool.reserve_a,0,0)==="—"||window.XerisExplorerFormat(pool.reserve_b,0,0)==="—")return"Unavailable";const denominator=BigInt(pool.reserve_a)*10n**BigInt(b),numerator=BigInt(pool.reserve_b)*10n**BigInt(a);if(denominator===0n)return"Unavailable";const scaled=numerator*1000000n/denominator;if(scaled===0n&&numerator>0n)return"<0.000001";const whole=scaled/1000000n,fraction=(scaled%1000000n).toString().padStart(6,"0").replace(/0+$/,"");return whole.toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g,",")+(fraction?"."+fraction:"")}
+'''
+    code = one(code, 'function iv(){', helpers + 'function iv(){', 'bounded owner and exact amount helpers')
+
+    def contract_list(text):
+        text = one(text, 'children:o.contract_type||o.type', 'children:o.raw_contract_type||o.contract_type||o.type||"Unavailable"', 'actual contract list type')
+        owner = 'a.jsx(A,{to:`/account/${o.owner}`,className:"hover:text-brand-accent transition-colors",children:o.owner})'
+        return one(text, owner, 'XerisOwnerAddress(o.owner)?' + owner + ':a.jsx("span",{children:o.owner||"Unavailable"})', 'reserved contract list owner')
+    view('uv', 'dv', contract_list)
+
+    def contract_detail(text):
+        text = one(text, 'children:t.contract_type||t.type', 'children:t.raw_contract_type||t.contract_type||t.type||"Unavailable"', 'actual contract detail type')
+        owner = 'a.jsx(A,{to:`/account/${t.owner}`,className:"text-brand-vibrant font-mono break-all hover:underline",children:t.owner})'
+        text = one(text, owner, 'XerisOwnerAddress(t.owner)?' + owner + ':a.jsx("span",{className:"font-mono break-all",children:t.owner||"Unavailable"})', 'reserved contract detail owner')
+        text = one(text, 'parseInt(((x=t.params)==null?void 0:x.reserve_a)||((w=t.state)==null?void 0:w.reserve_a)||0).toLocaleString()', 'XerisRawUnits(t.params?.reserve_a??t.state?.reserve_a)', 'exact contract reserve A')
+        text = one(text, 'parseInt(((g=t.params)==null?void 0:g.reserve_b)||((y=t.state)==null?void 0:y.reserve_b)||0).toLocaleString()', 'XerisRawUnits(t.params?.reserve_b??t.state?.reserve_b)', 'exact contract reserve B')
+        text = one(text, '`${((((S=t.params)==null?void 0:S.fee_bps)||((d=t.state)==null?void 0:d.fee_bps)||30)/100).toFixed(2)}%`', 'XerisPoolFee(t.params?.fee_bps??t.state?.fee_bps)', 'valid zero contract fee')
+        text = one(text, 'a.jsxs("div",{className:"mt-6 pt-6 border-t border-brand-muted/10",children:[a.jsx("div",{className:"text-[10px] text-text-dim uppercase mb-2",children:"Raw Data"})', 'a.jsxs("details",{className:"mt-6 pt-6 border-t border-brand-muted/10",children:[a.jsx("summary",{className:"text-xs text-text-dim uppercase mb-2 cursor-pointer",children:"Raw contract state"})', 'collapsible raw contract data')
+        text = one(text, 'JSON.stringify(t.params||t.state||{},null,2)', 'JSON.stringify({params:t.params??null,state:t.state??null},null,2)', 'retain complete public contract state')
+        return text
+    view('dv', 'fv', contract_detail)
+
+    def account_status(text):
+        text = one(text, 'k=!d.error&&d.status!=="failed"', 'k=window.XerisExplorerViews.transactionStatus(d.status??(d.error?"failed":undefined))', 'account transaction explicit outcome')
+        return one(text, 'className:`w-1.5 h-1.5 rounded-full flex-shrink-0 ${k?"bg-green-400":"bg-red-400"}`,title:k?"Success":"Failed"', 'className:`w-1.5 h-1.5 rounded-full flex-shrink-0 ${k.color}`,style:{backgroundColor:"currentColor"},title:k.label,"aria-label":k.label', 'account unknown and partial outcome labels')
+    view('ov', 'XerisOwnerAddress', account_status)
+    view('pv', 'mv', lambda text: one(text, '(parseFloat(o.price_a_in_b)*Math.pow(10,(n[o.token_a]||9)-(n[o.token_b]||6))).toLocaleString(void 0,{maximumFractionDigits:6})', 'XerisPoolPrice(o,n)', 'exact pool price requires known decimals'))
     return code, asserted

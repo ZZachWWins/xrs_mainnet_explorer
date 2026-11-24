@@ -137,7 +137,7 @@ def build():
 <header class="network-bar"><div class="network-identification"><strong>XERIS NETWORK EXPLORER</strong><span id="network-status" role="status">Verifying network…</span></div>
 <div class="network-choice" id="network-selector" role="group" aria-label="Explorer network"><button type="button" data-network="testnet" aria-pressed="@TESTNET@">Testnet</button><button type="button" data-network="mainnet" aria-pressed="@MAINNET@">Mainnet Beta</button></div></header>
 <div class="data-notice" id="data-notice" role="status" hidden></div>
-<main class="startup-loader" id="startup-loader" tabindex="-1" role="status" aria-live="polite"><span class="loading-ring" aria-hidden="true"></span><h1 id="loading-title">Loading the explorer…</h1><p id="loading-detail">Connecting to the selected Xeris network.</p></main>
+<main class="startup-loader" id="startup-loader" tabindex="-1" role="status" aria-live="polite"><span class="loading-ring" aria-hidden="true"></span><h1 id="loading-title">Loading the explorer…</h1><p id="loading-detail">Connecting to the selected Xeris network.</p><p class="loading-patience">This may take a moment…</p></main>
 <div id="root" aria-busy="true"></div>
 <noscript><style>.startup-loader{display:none}</style>This explorer needs JavaScript to verify and display the selected network.</noscript></body></html>'''.replace('@TESTNET@', str(default_network == 'testnet').lower()).replace('@MAINNET@', str(default_network == 'mainnet').lower()))
     manifest = {'format': 1, 'recovered_ui': True, 'default_network': default_network,
