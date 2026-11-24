@@ -1,7 +1,7 @@
 // Public configuration. No wallet, signer, secret, arbitrary endpoint, or fallback.
 export const DEFAULT_NETWORK = 'testnet';
 export const NETWORKS = Object.freeze({
-  mainnet: Object.freeze({name: 'Mainnet', origin: 'https://mainnetrpc.xerisweb.com', checkpointSlot: 27201,
+  mainnet: Object.freeze({name: 'Mainnet Beta', origin: 'https://mainnetrpc.xerisweb.com', checkpointSlot: 27201,
     checkpointHash: '0a401c139eef73f049010450d4aa13ef38636799784d01bbc0ecdb9c71facaf3'}),
   testnet: Object.freeze({name: 'Testnet', origin: 'http://138.197.116.81:50008', checkpointSlot: 27201,
     checkpointHash: '04a25302888ed7988efe33b427d9409ab6ba8c144cb0993ed515e57bbbef7fc7'}),
