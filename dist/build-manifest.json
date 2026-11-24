@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "recovered_ui": true,
+  "default_network": "testnet",
+  "read_only": true,
+  "source_sha256": "89bf6570f6418a00dba59b2b4f6b5a141076e8b5bd95316bd103c14ee7e3df47",
+  "patched_ui_sha256": "fd1fd4f55ce91f647a5e5222f3b7981ca820d1b4917ed233712dc4be4a99378b",
+  "asserted_ui_corrections": 35,
+  "network_state": "URL query; no persisted data or cross-network fallback",
+  "files": {
+    "assets/explorer-ui.css": "8b0584ef629031c6d226e5a064967b9da8f82045ed72baabdae933a8e35b8f47",
+    "assets/explorer-ui.js": "fd1fd4f55ce91f647a5e5222f3b7981ca820d1b4917ed233712dc4be4a99378b",
+    "bootstrap.mjs": "ba1f53fca0adf3d2ec1c1418b9003b2ffa8123b12ac47177d9844b8aad06fdcd",
+    "explorer-api.mjs": "4f022ddba36f19ec4993620de4872cc735b8ab104c10cfe46c6eef819f1534e9",
+    "explorer.css": "c37d68486e5ed88224bcbbcf114bc07a0073103008374d813b33c6243d0eb9da",
+    "favicon.ico": "d951f8a121c9f65f89fbc992e259559d67862fc6c765e266d9ac26729c442e7d",
+    "index.html": "0f3dde912cf22f73b45f944788314089be75cb5a350f70989b785b453254f64a",
+    "logos/logodark.png": "63cffb851db33a2aae86e371fadcb60b437399ef233652859476b3138837caf7",
+    "logos/logolight.png": "36e919d13ff6a0b16265f55e088b705ee26f8e7cb9432173058e49a722e14167",
+    "network.mjs": "09d5c1d7f5edd8cfbab1131097211fc1159fe1739296db80a755b559a6c9ade4"
+  }
+}

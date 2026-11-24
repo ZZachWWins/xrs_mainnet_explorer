@@ -1,0 +1,44 @@
+# Xeris network explorer
+
+Public, read-only explorer prepared for `ZZachWWins/xrs_mainnet_explorer` and Netlify. **Testnet is the current default.** Users can select Mainnet or Testnet at the top of every page.
+
+## Run and deploy
+
+Requirements: Node 20+ and Python 3. No package installation, account credentials, signing keys, database, or secret environment variables are required.
+
+```sh
+python3 build.py
+npm test
+npm run dev
+```
+
+Preview: `http://127.0.0.1:8770`. Explicit deep links use `?network=mainnet` or `?network=testnet`. Netlify should import this repository using the committed `netlify.toml`: build `python3 build.py`, publish `dist`, functions `netlify/functions`. Deploy the **repository**, including its read-only function; dragging only `dist` into hosting omits the API proxy.
+
+To switch the launch default later, edit the single `DEFAULT_NETWORK` constant in `src/network.mjs`, rebuild, test, and redeploy. Explicit saved network links remain unchanged. No network selection or chain data is persisted in browser storage. Switching networks performs a document reload, clearing React state and all in-memory requests. Internal links, history navigation, and copied deep links retain the network query.
+
+## Data boundaries
+
+The browser contacts only same-origin `/networks/<network>/…`. The Netlify function and local preview use the same fixed route validator. They permit only bounded explorer GET routes and an explicit read-only RPC method list. They reject write methods, unknown networks, arbitrary upstream URLs, excessive pagination, and redirects; they do not forward browser credentials. Responses have `Cache-Control: no-store` and an explicit network header. Failed reads never fall back to another chain or fabricate an empty successful response.
+
+Before loading the interface, each network must match its independently checked slot 27201 checkpoint:
+
+| Network | Fixed upstream | Checkpoint hash |
+| --- | --- | --- |
+| Mainnet | `https://mainnetrpc.xerisweb.com` | `0a401c139eef73f049010450d4aa13ef38636799784d01bbc0ecdb9c71facaf3` |
+| Testnet | `http://138.197.116.81:50008` | `04a25302888ed7988efe33b427d9409ab6ba8c144cb0993ed515e57bbbef7fc7` |
+
+The Testnet upstream comes from the supplied existing deployment. Browser traffic remains HTTPS when hosted, but the function-to-legacy-testnet hop is currently HTTP. The supplied `https://rpc.xerisweb.com` did not expose usable explorer REST/JSON-RPC routes during verification. Moving the legacy upstream behind working HTTPS is a follow-up infrastructure change; this project does not alter servers or DNS. A pinned historic checkpoint prevents accidental network mixing; it is not cryptographic verification of every returned record.
+
+Mainnet `/v2/stats`, blocks, validators, tokens and pools were verified. Its public proxy does not expose `/balances`, `/v2/contracts`, `/v2/search`, or token-holder routes; those features display an explicit unavailable notice and never borrow Testnet data. Pool contract details use the existing same-network `/contract/:id` route, with a validated raw Swap-to-UI mapping. Token metadata and issued supply remain visible when holders are unavailable. Transaction listings reflect the node endpoint's retained/indexed window and are labelled recent transactions, not a complete historical ledger. Native balance lists can be capped by the endpoint; they sort exact raw balances numerically and do not invent ownership percentages. Wrapped XRS holders are read from the token registry, never substituted with native balance holders. The inherited swap calculator is omitted because its quote route is not available on the public mainnet endpoint.
+
+The legacy Testnet token endpoint ignores pagination and returns a registry larger than Netlify's response limit. Only that fixed endpoint receives a bounded 24 MiB upstream allowance; `src/legacy-tokens.mjs` preserves exact raw integers and projects core assets plus the newest tokens into an explicitly limited 100-record listing. The browser displays coverage/count information and does not present this subset as a complete registry. Historical rows with unsupported identifiers are omitted with an explicit `omitted_count` and UI notice; duplicate identifiers still reject the response. Exact `token_id` lookups allow supported historical direct links outside the listing. All browser/function output remains capped at 4 MiB. Normal upstream routes retain their 4 MiB bound. Listing/lookup each read the current registry; no stale cached registry is substituted when the upstream fails. A proper paginated legacy index is the follow-up for browsing the entire large registry efficiently.
+
+Circulating supply is read only from the current Mainnet `/market/supply` schema-v2 `unlocked_on_chain_v2` feed. A missing/stale feed shows unavailable. It is not derived from wrapped-token maximum supply, premine assumptions, or FDV. Testnet circulating/total outstanding supply is unavailable without an authoritative feed. Historical raw integers above JavaScript's exact-number range remain strings. Human display conversions can be rounded; the explorer never signs or constructs spending transactions.
+
+## Recovered UI provenance and maintainability
+
+The provided folder was a compiled Vite deployment, without editable React/TypeScript source or its dependency manifest. `vendor/` preserves the supplied public JS/CSS/images. It is **not represented as recovered original source**. `build.py` replaces one asserted data-layer span with maintainable `src/explorer-api.mjs` and applies narrowly asserted UI repairs. It fixes case-sensitive asset paths and removes incorrect inherited claims such as hardcoded 100% success, inferred zero fees, 400 ms block time, wrapped maximum supply labelled circulating, and token maximum labelled total issued supply. Original license notices remain inside the vendor bundle. A future full UI refactor should use the original source repository if available.
+
+`dist/build-manifest.json` records SHA-256 hashes of the source UI, patched UI, and built assets. The build fails if an expected vendor patch no longer matches, so a new export cannot silently skip corrections. `src/network.mjs`, `src/proxy.mjs`, `src/explorer-api.mjs`, and `src/bootstrap.mjs` are the maintained network/data layers. CSS preserves the supplied branding while removing ornamental glows and improving the top selector/mobile spacing.
+
+Tests use synthetic public responses only. They cover checkpoint mismatch, explicit network routing, default selection, deep links, integer precision, request bounds, no write RPC, no credential forwarding, no cross-network fallback, stale supply, in-flight-only coalescing, and wrapped/native holder separation. Browser QA is performed against the local preview before publishing. This repository contains no signing keys, live journal, operator service, or node consensus changes.

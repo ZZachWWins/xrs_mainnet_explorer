@@ -1,0 +1,23 @@
+:root{color-scheme:dark;--network-height:58px}
+body{margin:0;background:#080c21;color:#e5e9f5}
+.network-bar{min-height:var(--network-height);box-sizing:border-box;display:flex;justify-content:space-between;align-items:center;gap:16px;padding:10px 40px;background:#0e1531;border-bottom:1px solid #27304c;font:500 14px Inter,system-ui,sans-serif;position:relative;z-index:80}
+.network-bar strong{color:#f2f5ff;font-weight:600}.network-choice{display:flex;align-items:center;gap:12px}.network-choice label{font-size:14px;color:#c3cce2}
+.network-choice{padding:3px;border:1px solid #425274;border-radius:7px;background:#080f25;gap:3px}
+.network-choice button{font:600 14px Inter,system-ui,sans-serif;background:transparent;color:#b9c7e4;border:0;border-radius:4px;min-width:96px;min-height:44px;padding:8px 14px;cursor:pointer}
+.network-choice button[aria-pressed=true]{background:#253863;color:#fff}.network-choice button:hover{color:#fff;background:#1b2b4d}
+.network-choice button:focus-visible,.connection-panel button:focus-visible{outline:3px solid #98b3ff;outline-offset:3px}
+#network-status{color:#b9c7e4;font-size:13px}.network-identification{display:flex;align-items:center;gap:18px}
+.data-notice{margin:0;padding:14px 40px;background:#352a18;border-bottom:1px solid #69552f;color:#f6dfac;font:400 14px/1.6 Inter,system-ui,sans-serif}.data-notice[hidden]{display:none}
+.connection-panel{max-width:760px;padding:64px 24px;margin:auto;font:16px/1.6 Inter,system-ui,sans-serif}.connection-panel h1{font-size:32px;color:#fff}.connection-panel button{background:#1c3292;color:#fff;padding:12px 18px;border:1px solid #6c83dc;border-radius:6px;font:600 15px Inter,system-ui,sans-serif}
+/* Keep the supplied brand and layout; remove ornamental glows and scanning. */
+.glass-card{box-shadow:none!important;backdrop-filter:none!important;background:rgba(18,26,52,.72)!important}
+.scanning-line{display:none!important}.glass-card:hover{box-shadow:none!important}
+#root .text-text-dim{color:#aebbd2!important}
+#root nav.sticky>div:first-child{flex-shrink:0}
+#root nav.sticky>div:last-child>div.hidden{gap:18px!important;font-size:11px!important;letter-spacing:.06em!important}
+#root nav.sticky form input:focus{width:clamp(140px,16vw,220px)}
+#root .w-1\.5.h-1\.5.rounded-full{display:none!important}
+#root .shadow-\[0_0_8px_rgba\(0\,25\,165\,0\.8\)\]{box-shadow:none!important}
+@media(min-width:768px) and (max-width:1199px){#root nav.sticky>div:last-child>div.hidden{display:none!important}#root nav.sticky>div:last-child>button{display:block!important}#root .fixed.inset-0.md\:hidden{display:block!important;top:78px}}
+@media(max-width:767px){.network-bar{padding:10px 16px;align-items:center;gap:10px}.network-identification{align-items:flex-start;flex-direction:column;gap:4px}.network-identification strong{font-size:11px}#network-status{font-size:11px}.network-choice button{min-width:76px;padding:8px 10px;font-size:13px}.data-notice{padding:12px 16px}#root main{padding-left:20px!important;padding-right:20px!important}#root nav{gap:8px}.connection-panel{padding-top:36px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
