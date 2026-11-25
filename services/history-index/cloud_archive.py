@@ -9,13 +9,17 @@ import argparse
 import base64
 from collections import deque
 import hashlib
+import http.client
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import math
 import os
 from pathlib import Path
 import re
+import sqlite3
 import stat
+import subprocess
+import sys
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -40,6 +44,11 @@ HASH = re.compile(r'^[0-9a-f]{64}$')
 ACCOUNT_QUERY_SECONDS = 2
 ACCOUNT_QUERY_VM_STEPS = 5_000_000
 ACCOUNT = re.compile(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$')
+SIGNATURE = re.compile(r'^[1-9A-HJ-NP-Za-km-z]{64,88}$')
+RECEIPT_BATCH = 4
+RECEIPT_SECONDS = 4
+RECEIPT_RESPONSE = 256 * 1024
+RECEIPT_ID = 'xeris-archive-receipt-v1'
 
 
 class CursorError(ValueError):
@@ -105,15 +114,64 @@ def fetch_live():
     return parse(raw)
 
 
+def _receipt_arguments(signature, slot):
+    require(type(signature) is str and SIGNATURE.fullmatch(signature)
+            and type(slot) is int and 0 < slot < 2**53, 'invalid receipt lookup')
+
+
+def _receipt_http(signature, slot):
+    """Disposable child: fixed local read RPC and exact block route only."""
+    _receipt_arguments(signature, slot)
+    def read(path, body=None):
+        connection = http.client.HTTPConnection('127.0.0.1', 50008, timeout=1)
+        try:
+            connection.request('POST' if body else 'GET', path, body,
+                {'Accept': 'application/json', 'Content-Type': 'application/json', 'Accept-Encoding': 'identity'})
+            response = connection.getresponse()
+            require(response.status == 200 and response.getheader('Content-Encoding', 'identity').lower() == 'identity'
+                    and response.getheader('Content-Type', '').split(';', 1)[0].strip().lower() == 'application/json',
+                    'native receipt response unavailable')
+            declared = response.getheader('Content-Length')
+            require(declared is None or declared.isascii() and declared.isdigit() and int(declared) <= RECEIPT_RESPONSE,
+                    'native receipt response exceeds bound')
+            raw = response.read(RECEIPT_RESPONSE + 1)
+            require(0 < len(raw) <= RECEIPT_RESPONSE, 'native receipt response exceeds bound')
+            return parse(raw)
+        finally:
+            connection.close()
+    reply = read('/', json.dumps({'jsonrpc': '2.0', 'id': RECEIPT_ID, 'method': 'getTransaction',
+                                 'params': [signature]}, separators=(',', ':')).encode())
+    require(type(reply) is dict and set(reply) == {'jsonrpc', 'id', 'result'}
+            and reply['jsonrpc'] == '2.0' and reply['id'] == RECEIPT_ID, 'invalid native receipt envelope')
+    return {'receipt': reply['result'], 'block': read('/v2/block/slot/' + str(slot)) if reply['result'] is not None else None}
+
+
+def fetch_receipt(signature, slot, *, deadline):
+    """Hard parent deadline also covers a stalled/slow-drip local response."""
+    _receipt_arguments(signature, slot)
+    remaining = min(1.0, deadline - time.monotonic())
+    require(math.isfinite(remaining) and remaining > 0, 'receipt batch deadline exceeded')
+    request = json.dumps({'signature': signature, 'slot': slot}, separators=(',', ':')).encode()
+    result = subprocess.run([sys.executable, '-E', '-s', str(Path(__file__).resolve()), '--read-receipt'],
+        input=request, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=remaining, check=False,
+        env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
+    require(result.returncode == 0 and 0 < len(result.stdout) <= RECEIPT_RESPONSE * 2 + 128,
+            'native receipt reader unavailable')
+    value = parse(result.stdout)
+    require(type(value) is dict and set(value) == {'receipt', 'block'}, 'invalid native receipt reader result')
+    return value
+
+
 class CloudArchive:
     def __init__(self, index_path, ledger_path, roster_path, ruleset_path,
-                 fetch_live=fetch_live, clock=time.time):
+                 fetch_live=fetch_live, clock=time.time, fetch_receipt=None):
         self.path, self.roster, self.ruleset = map(Path, (ledger_path, roster_path, ruleset_path))
         index_path = Path(index_path)
         require(index_path.exists() and not index_path.is_symlink()
                 and index_path.resolve() != self.path.resolve(), 'verified separate baseline required')
         self.index_path = index_path
         self.fetch_live, self.clock = fetch_live, clock
+        self.fetch_receipt = fetch_receipt
         self.lock = threading.RLock()
         self.state_lock = threading.Lock()
         self.failed = True
@@ -299,6 +357,94 @@ class CloudArchive:
                 self.epoch += 1
             return result
 
+    def receipt_updates(self, index, deadline):
+        """Optional bounded outcome enrichment, including older unknown rows.
+
+        Caller holds the derived writer transaction and rechecks canonical source
+        bytes after these reads. No unverified RPC effect/address is imported.
+        Missing or malformed optional receipts do not invalidate valid blocks.
+        """
+        if self.fetch_receipt is None:
+            return [], None
+        deadline = min(deadline, time.monotonic() + RECEIPT_SECONDS)
+        cursor = parse(index.meta('cloud_receipt_cursor') or 'null')
+        require(cursor is None or type(cursor) is list and len(cursor) == 3
+                and type(cursor[0]) is int and type(cursor[1]) is int and type(cursor[2]) is str,
+                'invalid stored receipt cursor')
+        conditions = "json_extract(data,'$.status')='unknown'"
+        params = []
+        if cursor:
+            conditions += ' AND (slot,position,signature)<(?,?,?)'
+            params.extend(cursor)
+        # A query budget prevents scanning an arbitrarily large known-history
+        # table from delaying canonical publication. No per-request scan occurs.
+        steps = 0
+        def progress():
+            nonlocal steps
+            steps += 1000
+            return int(steps > 500_000 or time.monotonic() >= deadline)
+        index.db.set_progress_handler(progress, 1000)
+        try:
+            rows = index.db.execute('SELECT signature,slot,position FROM transactions WHERE ' + conditions
+                + ' ORDER BY slot DESC,position DESC,signature DESC LIMIT ?', (*params, RECEIPT_BATCH)).fetchall()
+        except sqlite3.OperationalError as error:
+            if getattr(error, 'sqlite_errorcode', None) != sqlite3.SQLITE_INTERRUPT:
+                raise
+            return [], {'checked': 0, 'imported': 0, 'unavailable_or_invalid': 0, 'rejected': 0,
+                        'cursor': cursor, 'query_budget_exhausted': True,
+                        'observed_at_ms': int(self.now() * 1000)}
+        finally:
+            index.db.set_progress_handler(None, 0)
+        updates, checked, rejected, last = [], 0, 0, None
+        for row in rows:
+            if time.monotonic() >= deadline:
+                break
+            last = [row['slot'], row['position'], row['signature']]
+            checked += 1
+            try:
+                value = self.fetch_receipt(row['signature'], row['slot'], deadline=deadline)
+                require(time.monotonic() < deadline, 'receipt batch deadline exceeded')
+                tx, block = index.transaction(row['signature']), index.block(row['slot'])
+                require(type(value) is dict and set(value) == {'receipt', 'block'}, 'invalid receipt response')
+                receipt, observed = value['receipt'], value['block']
+                if receipt is None:
+                    continue
+                require(type(receipt) is dict and type(receipt.get('slot')) is int and receipt['slot'] == tx['slot']
+                        and type(receipt.get('transaction')) is dict and receipt['transaction'].get('signatures') == tx['signatures'],
+                        'receipt transaction identity mismatch')
+                meta = receipt.get('meta')
+                require(type(meta) is dict, 'missing execution evidence')
+                outcomes = meta.get('instructionOutcomes')
+                require(type(outcomes) is list and len(outcomes) == len(tx['instructions']) and len(outcomes) > 0
+                        and all(type(item) is dict and set(item) == {'index', 'ok'} and type(item['index']) is int
+                                and item['index'] == position and type(item['ok']) is bool for position, item in enumerate(outcomes)),
+                        'incomplete execution outcomes')
+                first_failed = next((item['index'] for item in outcomes if not item['ok']), None)
+                expected = None if first_failed is None else {'InstructionError': [first_failed, 'ExecutionFailed']}
+                require('err' in meta and h.canonical(meta['err']) == h.canonical(expected), 'outcome error mismatch')
+                require(type(observed) is dict and observed.get('success') is True and type(observed.get('data')) is dict,
+                        'native canonical block unavailable')
+                header = observed['data']
+                require(type(header.get('slot')) is int and header['slot'] == block['slot']
+                        and tx['block_hash'] == header.get('hash') == block['hash']
+                        and header.get('merkle_root') == block['merkle_root'], 'receipt canonical block mismatch')
+                members = header.get('transactions')
+                require(type(members) is list and type(header.get('transaction_count')) is int
+                        and header['transaction_count'] == len(members) == block['transaction_count']
+                        and all(type(member) is dict for member in members)
+                        and [member.get('signature') for member in members] == block['transactions']
+                        and members[tx['position']]['signature'] == tx['signature'], 'receipt canonical membership mismatch')
+                # Preserve complete outcomes, not unvalidated summary transfers
+                # or address attribution. Exact effects remain decoded from wire.
+                updates.append((tx['signature'], {'slot': tx['slot'], 'transaction': {'signatures': tx['signatures']},
+                    'meta': {'instructionOutcomes': outcomes, 'err': expected},
+                    'canonical_block': {'slot': block['slot'], 'hash': block['hash']}}))
+            except (ValueError, KeyError, IndexError, TypeError, OSError, subprocess.SubprocessError):
+                rejected += 1
+        next_cursor = last if last is not None and (len(rows) == RECEIPT_BATCH or checked < len(rows)) else None
+        return updates, {'checked': checked, 'imported': len(updates), 'unavailable_or_invalid': checked - len(updates),
+                         'rejected': rejected, 'cursor': next_cursor, 'observed_at_ms': int(self.now() * 1000)}
+
     def _refresh(self):
         """One bounded transactional derived-index refresh; no L1 writes."""
         with self.lock:
@@ -362,6 +508,7 @@ class CloudArchive:
                             require(index.db.execute('SELECT max(slot) FROM blocks').fetchone()[0] == last_slot,
                                     'source is a shorter prefix; explicit rebuild required')
                         live = self.match_live(index)
+                        receipt_updates, receipt_refresh = self.receipt_updates(index, deadline)
                         # The native request is outside our trust boundary too:
                         # recheck after it, so a source rewrite during that call
                         # cannot activate the prior digest as current evidence.
@@ -369,6 +516,11 @@ class CloudArchive:
                                 'source prefix changed during native verification')
                         self.source_matches(stream, identity(start), end)
                         self.metadata()
+                        for signature, receipt in receipt_updates:
+                            index._receipt(signature, receipt, 'same-node-rpc-canonical-block')
+                        if receipt_refresh is not None:
+                            index.setmeta('cloud_receipt_cursor', h.canonical(receipt_refresh['cursor']))
+                            index.setmeta('cloud_receipt_refresh', h.canonical(receipt_refresh))
                         verified = self.now()
                         next_anchor = boundaries[0] if len(boundaries) > STABLE_RECORDS else anchor
                         generation = {'tip': {'slot': last_slot, 'hash': last_hash},
@@ -383,7 +535,10 @@ class CloudArchive:
                             'prefix_rehashed': True, 'observer_matches': 0}))
                         # Compute chain-wide coverage once per background refresh,
                         # not once per public HTTP request.
-                        index.setmeta('cloud_coverage', h.canonical(index.coverage()))
+                        coverage = index.coverage()
+                        if receipt_refresh is not None:
+                            coverage['receipt_refresh'] = receipt_refresh
+                        index.setmeta('cloud_coverage', h.canonical(coverage))
                     return generation
             finally:
                 index.close()
@@ -623,10 +778,22 @@ def serve(archive):
 
 
 if __name__ == '__main__':
+    if sys.argv[1:] == ['--read-receipt']:
+        try:
+            raw = sys.stdin.buffer.read(1025)
+            require(0 < len(raw) <= 1024, 'receipt request exceeds bound')
+            request = parse(raw)
+            require(type(request) is dict and set(request) == {'signature', 'slot'}, 'invalid receipt request')
+            result = json.dumps(_receipt_http(request['signature'], request['slot']), separators=(',', ':'), allow_nan=False).encode()
+            require(len(result) <= RECEIPT_RESPONSE * 2 + 128, 'receipt response exceeds bound')
+            sys.stdout.buffer.write(result)
+        except Exception:
+            raise SystemExit(1)
+        raise SystemExit(0)
     parser = argparse.ArgumentParser()
     parser.add_argument('--index', required=True)
     parser.add_argument('--ledger', default='/var/lib/xeris/mainnet-v4/ledger.dat')
     parser.add_argument('--roster', default='/etc/xeris/genesis-roster.json')
     parser.add_argument('--ruleset', default='/var/lib/xeris/mainnet-v4/.xeris-mainnet-ruleset')
     options = parser.parse_args()
-    serve(CloudArchive(options.index, options.ledger, options.roster, options.ruleset))
+    serve(CloudArchive(options.index, options.ledger, options.roster, options.ruleset, fetch_receipt=fetch_receipt))

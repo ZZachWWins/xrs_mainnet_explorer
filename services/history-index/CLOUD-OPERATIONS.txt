@@ -107,7 +107,34 @@ checkpoint and separate Testnet route. Do not proxy arbitrary node control APIs.
 The checkpoint response includes public transaction membership/instructions;
 membership alone is not an execution-success receipt. Previously verified
 receipt outcomes are retained for unchanged records; newly indexed outcomes
-remain unknown until a separate verified receipt import.
+remain unknown until verified execution evidence is available. The background
+refresh now checks up to 4 unknown transactions (including older rows) within a
+4-second batch. A persisted descending cursor rotates past missing/invalid
+receipts rather than retrying only the newest entries. Each fixed local child
+has a maximum 1-second wall deadline and bounded response bytes; it calls only
+getTransaction and that transaction's exact block-detail route on the SAME
+127.0.0.1:50008 node. No public input chooses an RPC host/method/source path.
+
+An imported receipt must match the stored full signature list, slot, every
+instruction's indexed boolean outcome, error status, and canonical block
+hash/Merkle root/complete ordered membership. Only outcomes and canonical-block
+provenance are imported; unvalidated receipt summary effects/addresses are not.
+The captured source prefix is rehashed after these calls and before the derived
+transaction commits. Receipt updates, coverage and canonical generation publish
+together. Receipt absence, malformed evidence, child timeout or the optional
+query's 500,000-VM-step/time bound leaves outcomes unknown; it does not turn them
+into failed transactions or prevent a valid canonical generation from publishing.
+Coverage includes bounded receipt_refresh telemetry. Existing verified outcomes
+survive unchanged ledger refreshes; orphaned rows are removed on verified reorg.
+
+The native getTransaction RPC searches its recent in-memory block window. Old
+unknowns whose transactions have aged out can remain unknown even if persistent
+receipt records exist. Recover those with the existing reviewed snapshot-receipts
+and receipt-import tools: read only the PUBLIC receipt SQLite schema, take a
+consistent SQLite backup (including WAL state), and import only after its tip
+hash is present in this verified index. Use an operator-controlled temporary
+snapshot; no persistent broader node-directory ACL is required. Do not copy a
+live SQLite file directly, guess success from inclusion, or alter L1 state.
 
 NETLIFY BLOBS
 
