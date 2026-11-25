@@ -134,7 +134,7 @@ def build():
 <link rel="stylesheet" href="/assets/explorer-ui.css"><link rel="stylesheet" href="/explorer.css"><script type="module" src="/bootstrap.mjs"></script>
 </head><body class="bg-brand-navy text-text-body antialiased">
 <a id="skip-to-content" class="skip-to-content" href="#startup-loader">Skip to explorer content</a>
-<header class="network-bar"><div class="network-identification"><strong>XERIS NETWORK EXPLORER</strong><span id="network-status" role="status">Verifying network…</span></div>
+<header class="network-bar"><div class="network-identification"><strong>XERIS NETWORK EXPLORER</strong><span id="network-status" role="status">Verifying network…</span><span id="network-freshness">Session --:--:--</span></div>
 <div class="network-choice" id="network-selector" role="group" aria-label="Explorer network"><button type="button" data-network="testnet" aria-pressed="@TESTNET@">Testnet</button><button type="button" data-network="mainnet" aria-pressed="@MAINNET@">Mainnet Beta</button></div></header>
 <div class="data-notice" id="data-notice" role="status" hidden></div>
 <main class="startup-loader" id="startup-loader" tabindex="-1" role="status" aria-live="polite"><span class="loading-ring" aria-hidden="true"></span><h1 id="loading-title">Loading the explorer…</h1><p id="loading-detail">Connecting to the selected Xeris network.</p><p class="loading-patience">This may take a moment…</p></main>

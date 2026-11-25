@@ -13,7 +13,7 @@ export function retryAfterMilliseconds(value, now = Date.now()) {
   return Number.isFinite(delay) ? Math.min(86_400_000, Math.max(0, Math.ceil(delay))) : 0;
 }
 
-export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {}, onNotice = () => {}, now = Date.now, getContext = () => '', readTimeoutMs, supplyTimeoutMs = 2000} = {}) {
+export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {}, onNotice = () => {}, onFreshness = () => {}, now = Date.now, getContext = () => '', readTimeoutMs, supplyTimeoutMs = 2000} = {}) {
   if (!Object.hasOwn(NETWORKS, network)) throw new Error('Unknown network');
   const prefix = `/networks/${network}`;
   let identity, bindingFailure, lastSupply;
@@ -62,6 +62,10 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
             catch { throw error('Invalid public response', {code: 'INVALID_RESPONSE'}); }
             if (!result || typeof result !== 'object' || Array.isArray(result)) throw error('Invalid public response', {code: 'INVALID_RESPONSE'});
             if (result.success === false || result.error) throw error(`${NETWORKS[network].name}: requested record is unavailable`, {code: 'RECORD_UNAVAILABLE'});
+            const state = response.headers.get('x-xeris-data-state') === 'stale' ? 'stale' : 'live';
+            const headerTime = Number(response.headers.get('x-xeris-observed-at'));
+            const observedAtMs = Number.isSafeInteger(headerTime) && headerTime > 0 && headerTime <= now() ? headerTime : now();
+            try { onFreshness({state, observedAtMs, path}); } catch { /* Presentation callbacks never invalidate verified data. */ }
             if (bindingFailure) throw bindingFailure;
             return result;
           } catch (cause) {
