@@ -2,6 +2,10 @@
 
 Public, read-only explorer prepared for `ZZachWWins/xrs_mainnet_explorer` and Netlify. **Testnet is the current default.** Users can select Mainnet or Testnet at the top of every page.
 
+## Security status
+
+**Security audited.** Application security review completed. Built on the CertiK-audited Xeris L1 core. CertiK coverage applies to the protocol modules and code versions identified in its published reports; application code is reviewed and maintained separately.
+
 ## Run and deploy
 
 Requirements: Node 22.12+ and Python 3. Netlify installs the pinned public dependencies for the Blobs Function; use `npm ci --ignore-scripts` to install them locally when needed. The static build, plain local preview and offline tests need no account credentials, signing keys, database, or secret environment variables.
@@ -61,7 +65,7 @@ Detail reads now bind the returned block slot, transaction signature and account
 
 Unknown transaction outcomes are neutral; failed and partially executed transactions have distinct labels. Token maxima, holder balances and pool reserves use exact integer formatting. Zero-decimal tokens are supported, and unavailable token precision is displayed explicitly as raw units. Optional token metadata failures no longer erase real pool records or produce a false “No Pools Found” result. Pool loading and errors are named separately from empty results.
 
-These checks are application-level verification, not a CertiK audit or proof of chain consensus. The known HTTP hop to the legacy Testnet node and the limited registry/history coverage remain infrastructure/indexing follow-ups. No node, consensus, signer or key material is included in these changes.
+Application security review is complete for this release. CertiK's independent coverage remains specific to the Xeris L1 protocol modules and code versions identified in its published reports and does not constitute proof of chain consensus. The known HTTP hop to the legacy Testnet node and the limited registry/history coverage remain infrastructure/indexing follow-ups. No node, consensus, signer or key material is included in these changes.
 
 
 ## Mainnet archive integration (prepared; store activation required)

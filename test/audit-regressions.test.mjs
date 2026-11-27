@@ -73,3 +73,11 @@ test('built pool formatter preserves zero-decimal and raw balances without unsaf
   assert.equal(scope.Sc(Number.MAX_SAFE_INTEGER+1,0),'Unavailable');
   assert.equal(rawUnits('18446744073709551616'),'—');
 });
+test('built explorer presents the scoped security audit status on every route',()=>{
+  const html=readFileSync(new URL('../dist/index.html',import.meta.url),'utf8');
+  const css=readFileSync(new URL('../dist/explorer.css',import.meta.url),'utf8');
+  assert.match(html,/SECURITY AUDITED/);
+  assert.match(html,/Built on the CertiK-audited Xeris L1 core\./);
+  assert.match(html,/class="network-audit" aria-label="Security audit status"/);
+  assert.match(css,/\.network-audit\{/);
+});

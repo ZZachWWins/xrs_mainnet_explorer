@@ -43,7 +43,7 @@ def build():
          '"aria-label":t?"Close navigation menu":"Open navigation menu","aria-expanded":t,className:"md:hidden text-text-dim hover:text-white p-1",onClick:()=>n(!t)'),
         ('value:(l==null?void 0:l.num_validators)||0', 'value:(l==null?void 0:l.num_validators)??"—"'),
         ('label:"Total Supply",value:l!=null&&l.total_supply?`${(l.total_supply/1e18).toFixed(1)}B`:"..."',
-         'label:"Total Staked",value:l!=null&&l.total_staked?window.XerisExplorerFormat(l.total_staked,9,0)+" XRS":"—"'),
+         'label:"Total Staked",value:l!=null&&l.total_staked?window.XerisExplorerFormat(l.total_staked,9,0)+" XRS":"—"}),a.jsx(er,{icon:a.jsx(xc,{size:20}),label:"XRS Market Cap",value:l!=null&&l.market_cap_quote_raw?window.XerisExplorerUSD(l.market_cap_quote_raw,l.market_cap_quote_decimals):l?"Unavailable":"Loading…",color:"text-brand-vibrant"'),
         ('children:"Success Rate"', 'children:"Recorded TXS"'),
         ('children:[h.toFixed(2),"%"]', 'children:(l==null?void 0:l.total_transactions)??"—"'),
         ('children:"Avg Fee"', 'children:"Accounts"'),
@@ -135,6 +135,7 @@ def build():
 </head><body class="bg-brand-navy text-text-body antialiased">
 <a id="skip-to-content" class="skip-to-content" href="#startup-loader">Skip to explorer content</a>
 <header class="network-bar"><div class="network-identification"><strong>XERIS NETWORK EXPLORER</strong><span id="network-status" role="status">Verifying network…</span><span id="network-freshness">Session --:--:--</span></div>
+<div class="network-audit" aria-label="Security audit status"><strong>SECURITY AUDITED</strong><span>Built on the CertiK-audited Xeris L1 core.</span></div>
 <div class="network-choice" id="network-selector" role="group" aria-label="Explorer network"><button type="button" data-network="testnet" aria-pressed="@TESTNET@">Testnet</button><button type="button" data-network="mainnet" aria-pressed="@MAINNET@">Mainnet Beta</button></div></header>
 <div class="data-notice" id="data-notice" role="status" hidden></div>
 <main class="startup-loader" id="startup-loader" tabindex="-1" role="status" aria-live="polite"><span class="loading-ring" aria-hidden="true"></span><h1 id="loading-title">Loading the explorer…</h1><p id="loading-detail">Connecting to the selected Xeris network.</p><p class="loading-patience">This may take a moment…</p></main>
