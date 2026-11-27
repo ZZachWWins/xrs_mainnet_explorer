@@ -5,7 +5,8 @@ import {createExplorerAPI, ExplorerError, retryAfterMilliseconds} from '../src/e
 import {proxyResponse} from '../src/proxy.mjs';
 
 const reply = (value, network = 'mainnet', options = {}) => new Response(JSON.stringify(value), {
-  ...options, headers: {'x-xeris-network': network, ...options.headers},
+  ...options, headers: {'x-xeris-network': network,
+    ...(network === 'mainnet' ? {'x-xeris-chain-id': NETWORKS.mainnet.chainId} : {}), ...options.headers},
 });
 const identity = network => reply({success: true, data: {slot: 27201, hash: NETWORKS[network].checkpointHash}}, network);
 
@@ -13,7 +14,7 @@ test('one transient identity failure can recover without permitting another chai
   const calls = []; let fail = true;
   const api = createExplorerAPI('mainnet', {fetchImpl: async url => {
     calls.push(url);
-    if (url.endsWith('/27201')) {
+    if (url.endsWith('/identity/checkpoint')) {
       if (fail) { fail = false; throw new TypeError('Synthetic network interruption'); }
       return identity('mainnet');
     }
@@ -35,7 +36,9 @@ test('429 identity errors retain retry instructions and do not automatically ret
 });
 
 test('actual checkpoint/header mismatches remain latched even if next response would be valid', async () => {
-  for (const wrong of [() => identity('testnet'), () => reply({success: true, data: {slot: 27201, hash: NETWORKS.testnet.checkpointHash}})]) {
+  for (const wrong of [() => identity('testnet'),
+    () => reply({success: true, data: {slot: 27201, hash: NETWORKS.mainnet.checkpointHash}}, 'mainnet', {headers: {'x-xeris-chain-id': 'xeris-mainnet-other'}}),
+    () => reply({success: true, data: {slot: 27201, hash: NETWORKS.testnet.checkpointHash}})]) {
     let calls = 0;
     const api = createExplorerAPI('mainnet', {fetchImpl: async () => { calls++; return calls === 1 ? wrong() : identity('mainnet'); }});
     await assert.rejects(api.ready(), e => e.code === 'NETWORK_MISMATCH' && !e.retryable);
@@ -47,8 +50,9 @@ test('actual checkpoint/header mismatches remain latched even if next response w
 test('missing optional supply never replaces otherwise valid stats or emits global failure', async () => {
   const errors = []; let feedCalls = 0;
   const api = createExplorerAPI('mainnet', {onError: (...args) => errors.push(args), fetchImpl: async url => {
-    if (url.endsWith('/27201')) return identity('mainnet');
+    if (url.endsWith('/identity/checkpoint')) return identity('mainnet');
     if (url.endsWith('/v2/stats')) return reply({success: true, data: {current_slot: 35000, validator_count: 3}});
+    if (url.includes('/v2/pools')) return reply({}, 'mainnet', {status: 503});
     feedCalls++; return reply({}, 'mainnet', {status: 503, headers: {'retry-after': '10'}});
   }});
   const stats = await api.stats();
@@ -61,8 +65,9 @@ test('missing optional supply never replaces otherwise valid stats or emits glob
 test('optional supply deadline completes even when fetch ignores cancellation', async () => {
   const errors = [];
   const api = createExplorerAPI('mainnet', {supplyTimeoutMs: 5, onError: (...args) => errors.push(args), fetchImpl: async url => {
-    if (url.endsWith('/27201')) return identity('mainnet');
+    if (url.endsWith('/identity/checkpoint')) return identity('mainnet');
     if (url.endsWith('/v2/stats')) return reply({success: true, data: {current_slot: 35001, validator_count: 3}});
+    if (url.includes('/v2/pools')) return reply({}, 'mainnet', {status: 503});
     return new Promise(() => {});
   }});
   assert.equal((await api.stats()).current_slot, 35001);
@@ -72,7 +77,7 @@ test('optional supply deadline completes even when fetch ignores cancellation', 
 test('optional history enrichment cannot report a global endpoint failure', async () => {
   const errors = [];
   const api = createExplorerAPI('mainnet', {onError: (...args) => errors.push(args), fetchImpl: async url =>
-    url.endsWith('/27201') ? identity('mainnet') : reply({}, 'mainnet', {status: 501})});
+    url.endsWith('/identity/checkpoint') ? identity('mainnet') : reply({}, 'mainnet', {status: 501})});
   await assert.rejects(api.block(20000, {optional: true}), e => e.code === 'UNSUPPORTED_ENDPOINT' && !e.retryable);
   assert.equal(errors.length, 0);
   await assert.rejects(api.block(20000));
@@ -84,7 +89,7 @@ test('a stalled response body expires, cancels, and can be retried', async () =>
   const api = createExplorerAPI('mainnet', {readTimeoutMs: 5, fetchImpl: async () => {
     calls++;
     if (calls !== 1) return identity('mainnet');
-    return new Response(new ReadableStream({cancel() { cancelled = true; return new Promise(() => {}); }}), {headers: {'x-xeris-network': 'mainnet'}});
+    return new Response(new ReadableStream({cancel() { cancelled = true; return new Promise(() => {}); }}), {headers: {'x-xeris-network': 'mainnet', 'x-xeris-chain-id': NETWORKS.mainnet.chainId}});
   }});
   await assert.rejects(api.ready(), e => e.code === 'TIMEOUT' && e.retryable);
   assert.equal(cancelled, true);
@@ -93,7 +98,7 @@ test('a stalled response body expires, cancels, and can be retried', async () =>
 
 test('body size/UTF-8 bounds reject invalid data rather than fabricating an empty success', async () => {
   for (const body of [Uint8Array.of(0xff), new Uint8Array(4_194_305)]) {
-    const api = createExplorerAPI('mainnet', {fetchImpl: async () => new Response(body, {headers: {'x-xeris-network': 'mainnet'}})});
+    const api = createExplorerAPI('mainnet', {fetchImpl: async () => new Response(body, {headers: {'x-xeris-network': 'mainnet', 'x-xeris-chain-id': NETWORKS.mainnet.chainId}})});
     await assert.rejects(api.ready(), e => e.code === 'INVALID_RESPONSE' && !e.retryable);
   }
 });
@@ -102,7 +107,7 @@ test('coalesced failures retain each caller route context instead of first calle
   let context = '/old', resolve;
   const errors = [];
   const api = createExplorerAPI('mainnet', {getContext: () => context, onError: (_, route) => errors.push(route), fetchImpl: async url =>
-    url.endsWith('/27201') ? identity('mainnet') : new Promise(r => { resolve = r; })});
+    url.endsWith('/identity/checkpoint') ? identity('mainnet') : new Promise(r => { resolve = r; })});
   await api.ready();
   const first = api.validators();
   await new Promise(r => setTimeout(r, 0));
@@ -150,7 +155,7 @@ test('proxy rejects malformed UTF-8 even when replacement decoding would form va
 
 test('optional enrichment cannot impose its shorter deadline on a primary block detail read', async () => {
   const resolves = [];
-  const api = createExplorerAPI('mainnet', {fetchImpl: async url => url.endsWith('/27201') ? identity('mainnet') :
+  const api = createExplorerAPI('mainnet', {fetchImpl: async url => url.endsWith('/identity/checkpoint') ? identity('mainnet') :
     new Promise(resolve => resolves.push(resolve))});
   await api.ready();
   const enrichment = api.block(35000, {optional: true});

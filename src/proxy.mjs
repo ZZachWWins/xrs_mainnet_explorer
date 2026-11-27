@@ -54,6 +54,11 @@ export function routeRequest(input, method = 'GET', body = null) {
   if (!match) throw new Error('Unknown network route');
   const [, network, path] = match;
   checkQuery(url.searchParams);
+  if (path === '/identity/checkpoint') {
+    if (network !== 'mainnet' || method !== 'GET' || body || url.search) throw new Error('Archived checkpoint is Mainnet GET only');
+    return {network, url: `${NETWORKS.mainnet.origin}/history/block/${NETWORKS.mainnet.checkpointSlot}`,
+      method: 'GET', body: null, archiveCheckpoint: true};
+  }
   if (path === '/rpc') {
     if (network !== 'mainnet' || method !== 'POST' || url.search || typeof body !== 'string' || body.length > 8192) throw new Error('Unsupported RPC');
     const request = JSON.parse(body);
@@ -106,7 +111,9 @@ export async function proxyResponse(request, {fetchImpl = fetch, timeoutMs, now 
       headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'Cache-Control': 'no-cache'},
       redirect: 'error', cache: 'no-store', signal: controller.signal}), deadline]);
     const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
-    if (!response.ok || !['application/json', 'text/plain'].includes(contentType)) {
+    const supportedType = route.archiveCheckpoint ? contentType === 'application/json'
+      : ['application/json', 'text/plain'].includes(contentType);
+    if (!response.ok || !supportedType) {
       const transient = response.status === 429 || response.status === 503;
       const retryAfter = transient ? retryAfterHeader(response.headers.get('retry-after'), now()) : null;
       if (retryAfter !== null) headers['Retry-After'] = retryAfter;
@@ -132,7 +139,20 @@ export async function proxyResponse(request, {fetchImpl = fetch, timeoutMs, now 
     const text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
     let output;
     if (route.legacyTokens) output = JSON.stringify(projectLegacyTokens(text, route.legacyTokens));
-    else { JSON.parse(text); output = text; } // Legacy REST can label valid JSON text/plain.
+    else if (route.archiveCheckpoint) {
+      // Never relay the archive response as identity evidence. Bind its
+      // transport headers, declared coverage, slot and hash here, then expose
+      // only the minimal shape consumed by the browser checkpoint verifier.
+      const value = JSON.parse(text), pin = NETWORKS.mainnet;
+      if (response.headers.get('x-xeris-network') !== 'mainnet' ||
+          response.headers.get('x-xeris-chain-id') !== pin.chainId ||
+          !value || typeof value !== 'object' || Array.isArray(value) ||
+          value.coverage?.chain_id !== pin.chainId ||
+          value.data?.slot !== pin.checkpointSlot || value.data?.hash !== pin.checkpointHash)
+        throw new Error('Archived checkpoint identity mismatch');
+      headers['X-Xeris-Chain-Id'] = pin.chainId;
+      output = JSON.stringify({success: true, data: {slot: pin.checkpointSlot, hash: pin.checkpointHash}});
+    } else { JSON.parse(text); output = text; } // Legacy REST can label valid JSON text/plain.
     if (new TextEncoder().encode(output).byteLength > 4_194_304) throw new Error('Projected response too large');
     return new Response(output, {status: 200, headers});
   } catch {

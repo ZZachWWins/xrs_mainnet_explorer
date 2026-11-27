@@ -2,17 +2,17 @@
 // identity/schema failures remain explicit and never enter an automatic loop.
 export function createConnectionRecovery({connect, onConnecting, onConnected, onFailure,
   schedule = setTimeout, cancel = clearTimeout, now = Date.now} = {}) {
-  let timer, running = false, stopped = false, failures = 0, notBefore = 0;
+  let timer, running = false, stopped = false, connected = false, failures = 0, notBefore = 0;
   const clear = () => { if (timer !== undefined) cancel(timer); timer = undefined; };
   async function attempt() {
     if (stopped || running || now() < notBefore) return false;
     clear(); running = true;
     try {
-      onConnecting();
+      onConnecting({reconnecting: connected});
       await connect();
       if (stopped) return false;
-      await onConnected();
-      stopped = true;
+      await onConnected({reconnected: connected});
+      connected = true; failures = 0; notBefore = 0;
       return true;
     } catch (error) {
       if (stopped) return false;

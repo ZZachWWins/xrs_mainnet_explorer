@@ -1,7 +1,7 @@
 // Public configuration. No wallet, signer, secret, arbitrary endpoint, or fallback.
 export const DEFAULT_NETWORK = 'testnet';
 export const NETWORKS = Object.freeze({
-  mainnet: Object.freeze({name: 'Mainnet Beta', origin: 'https://mainnetrpc.xerisweb.com', checkpointSlot: 27201,
+  mainnet: Object.freeze({name: 'Mainnet Beta', origin: 'https://mainnetrpc.xerisweb.com', chainId: 'xeris-mainnet-v4', checkpointSlot: 27201,
     checkpointHash: '0a401c139eef73f049010450d4aa13ef38636799784d01bbc0ecdb9c71facaf3'}),
   testnet: Object.freeze({name: 'Testnet', origin: 'http://138.197.116.81:50008', checkpointSlot: 27201,
     checkpointHash: '04a25302888ed7988efe33b427d9409ab6ba8c144cb0993ed515e57bbbef7fc7'}),
@@ -59,4 +59,22 @@ export function rawUnits(value, decimals = 9, maximumFractionDigits = 9) {
   const whole = decimals ? padded.slice(0, -decimals) : padded;
   const fraction = decimals ? padded.slice(-decimals).slice(0, maximumFractionDigits).replace(/0+$/, '') : '';
   return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (fraction ? '.' + fraction : '');
+}
+
+export function compactUSD(value, decimals = 6) {
+  const raw = String(value);
+  if (!/^(0|[1-9]\d*)$/.test(raw) || raw.length > 30 ||
+      !Number.isInteger(decimals) || decimals < 0 || decimals > 18) return '—';
+  const amount = BigInt(raw), base = 10n ** BigInt(decimals);
+  const units = [['T', 1_000_000_000_000n], ['B', 1_000_000_000n], ['M', 1_000_000n], ['K', 1_000n]];
+  for (const [suffix, multiplier] of units) {
+    const scale = base * multiplier;
+    if (amount < scale) continue;
+    const hundredths = (amount * 100n + scale / 2n) / scale;
+    const whole = (hundredths / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const fraction = (hundredths % 100n).toString().padStart(2, '0').replace(/0+$/, '');
+    return '$' + whole + (fraction ? '.' + fraction : '') + suffix;
+  }
+  const rounded = (amount + base / 2n) / base;
+  return '$' + rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }

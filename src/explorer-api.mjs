@@ -19,6 +19,11 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
   let identity, bindingFailure, lastSupply;
   const pending = new Map();
   const error = (message, options) => new ExplorerError(message, {network, ...options});
+  // Mainnet's node keeps only a recent live window, so its pinned historic
+  // identity is exposed by a dedicated same-origin Function route. Testnet's
+  // pinned slot is still available from its live endpoint.
+  const checkpointPath = network === 'mainnet' ? '/identity/checkpoint'
+    : `/v2/block/slot/${NETWORKS[network].checkpointSlot}`;
   async function read(path, {identityCheck = false, reportError = true, timeoutMs} = {}) {
     const context = getContext();
     const pendingKey = path + (timeoutMs === undefined ? '' : `|deadline:${timeoutMs}`);
@@ -44,6 +49,8 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
             });
             }
             if (response.headers.get('x-xeris-network') !== network) throw error('Network response binding failed', {code: 'NETWORK_MISMATCH'});
+            if (path === '/identity/checkpoint' && response.headers.get('x-xeris-chain-id') !== NETWORKS[network].chainId)
+              throw error('Network chain binding failed', {code: 'NETWORK_MISMATCH'});
             const maximumBytes = 4_194_304;
             if (Number(response.headers.get('content-length') || 0) > maximumBytes) throw error('Public response exceeds size limit', {code: 'INVALID_RESPONSE'});
             if (!response.body) throw error('Missing public response', {code: 'INVALID_RESPONSE'});
@@ -87,14 +94,19 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
       throw cause;
     }
   }
+  async function probe() {
+    const value = await read(checkpointPath, {identityCheck: true, reportError: false});
+    try { return verifyCheckpoint(network, value); }
+    catch {
+      const mismatch = error('Network checkpoint mismatch; data display stopped', {code: 'NETWORK_MISMATCH'});
+      bindingFailure = mismatch;
+      throw mismatch;
+    }
+  }
   function ready() {
     if (bindingFailure) return Promise.reject(bindingFailure);
     if (!identity) {
-      const attempt = read(`/v2/block/slot/${NETWORKS[network].checkpointSlot}`, {identityCheck: true, reportError: false})
-        .then(value => {
-          try { return verifyCheckpoint(network, value); }
-          catch { throw error('Network checkpoint mismatch; data display stopped', {code: 'NETWORK_MISMATCH'}); }
-        });
+      const attempt = probe();
       identity = attempt;
       // An unavailable transport can recover on a later caller. A real identity
       // mismatch remains latched, so retrying can never override a wrong chain.
@@ -124,11 +136,26 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
     if (network === 'mainnet') {
       try {
         const feed = await read('/market/supply', {reportError: false, timeoutMs: supplyTimeoutMs});
+        const market = feed.market;
         if (feed.schema_version !== '2' || feed.chain_id !== 'xeris-mainnet-v4' || feed.status !== 'ready' ||
             feed.supply?.basis !== 'unlocked_on_chain_v2' || !/^[0-9]+$/.test(feed.supply?.circulating_raw) ||
             !/^[0-9]+$/.test(feed.expires_at_ms) || BigInt(feed.expires_at_ms) <= BigInt(now())) throw new Error('Live circulating supply unavailable');
+        let marketCapRaw, marketCapDecimals;
+        if (market?.token_id === 'native_xrs' && market?.quote_token_id === 'xeris_usdc' &&
+            market?.valuation_basis === 'circulating_supply' && market?.price_basis === 'pool_spot' &&
+            market?.circulating_raw === feed.supply.circulating_raw && /^[0-9]+$/.test(market?.market_cap_quote_raw) &&
+            /^[0-9]+$/.test(market?.price_quote_raw_numerator) && /^[1-9][0-9]*$/.test(market?.price_xrs_raw_denominator) &&
+            /^(0|[1-9][0-9]?)$/.test(market?.quote_decimals) && Number(market.quote_decimals) <= 18) {
+          const expected = BigInt(feed.supply.circulating_raw) * BigInt(market.price_quote_raw_numerator) /
+            BigInt(market.price_xrs_raw_denominator);
+          if (expected === BigInt(market.market_cap_quote_raw)) {
+            marketCapRaw = market.market_cap_quote_raw;
+            marketCapDecimals = Number(market.quote_decimals);
+          }
+        }
         lastSupply = {raw: feed.supply.circulating_raw, expires: BigInt(feed.expires_at_ms),
-          observedAt: feed.observed_at, mined: feed.mining?.total_mined_raw};
+          observedAt: feed.observed_at, mined: feed.mining?.total_mined_raw,
+          marketCapRaw, marketCapDecimals};
       } catch (cause) {
         // A brief transport failure must not erase an observation that is still
         // within its original validity period. Invalid data is never retained.
@@ -138,6 +165,9 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
         const observed = lastSupply;
         Object.defineProperty(result, 'circulating_supply', {enumerable: true,
           get: () => BigInt(now()) < observed.expires ? observed.raw : undefined});
+        Object.defineProperty(result, 'market_cap_quote_raw', {enumerable: true,
+          get: () => BigInt(now()) < observed.expires ? observed.marketCapRaw : undefined});
+        result.market_cap_quote_decimals = observed.marketCapDecimals;
         result.supply_observed_at = observed.observedAt;
         // Gross emitted amount is not labelled circulating or outstanding supply.
         result.total_mined_raw = observed.mined;
@@ -155,7 +185,7 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
       throw error('The returned record does not match this page', {code: 'RECORD_MISMATCH'});
     return value;
   };
-  return Object.freeze({network, ready, stats,
+  return Object.freeze({network, ready, probe, stats,
     accountAges: async () => network === 'mainnet'
       ? validateAccountAges(await read('/history/accounts', {reportError:false}))
       : {data:[],basis:'unavailable',truncated:false},

@@ -8,9 +8,9 @@ function fixture() {
   const feed={schema_version:'2',chain_id:'xeris-mainnet-v4',status:'ready',
     expires_at_ms:'30000',observed_at:'2026-11-24T22:00:00Z',
     supply:{basis:'unlocked_on_chain_v2',circulating_raw:'200165828090408815'}};
-  const reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'x-xeris-network':'mainnet'}});
+  const reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'x-xeris-network':'mainnet','x-xeris-chain-id':NETWORKS.mainnet.chainId}});
   const api=createExplorerAPI('mainnet',{now:()=>clock,fetchImpl:async path=>{
-    if(path.endsWith('/27201'))return reply({success:true,data:{slot:27201,hash:NETWORKS.mainnet.checkpointHash}});
+    if(path.endsWith('/identity/checkpoint'))return reply({success:true,data:{slot:27201,hash:NETWORKS.mainnet.checkpointHash}});
     if(path.endsWith('/v2/stats'))return reply({success:true,data:{current_slot:51000,validator_count:3}});
     if(mode==='offline')throw new TypeError('Temporary transport interruption');
     if(mode==='busy')return reply({},503);

@@ -5,8 +5,9 @@ import vm from 'node:vm';
 import {createExplorerAPI} from '../src/explorer-api.mjs';
 import {NETWORKS, rawUnits} from '../src/network.mjs';
 import {loadPoolsView, transactionStatus} from '../src/view-loaders.mjs';
-const reply = (data, network = 'mainnet') => new Response(JSON.stringify({success:true,data}), {headers:{'x-xeris-network':network}});
-const make = handler => createExplorerAPI('mainnet', {fetchImpl:async url => url.endsWith('/27201')
+const reply = (data, network = 'mainnet') => new Response(JSON.stringify({success:true,data}), {headers:{'x-xeris-network':network,
+  ...(network === 'mainnet' ? {'x-xeris-chain-id':NETWORKS.mainnet.chainId} : {})}});
+const make = handler => createExplorerAPI('mainnet', {fetchImpl:async url => url.endsWith('/identity/checkpoint')
   ? reply({slot:27201,hash:NETWORKS.mainnet.checkpointHash}) : handler(url)});
 const tick = () => new Promise(resolve=>setTimeout(resolve,0));
 

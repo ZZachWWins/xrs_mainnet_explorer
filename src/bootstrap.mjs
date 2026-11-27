@@ -1,4 +1,4 @@
-import {NETWORKS, selectedNetwork, networkLink, rawUnits} from './network.mjs';
+import {NETWORKS, selectedNetwork, networkLink, rawUnits, compactUSD} from './network.mjs';
 import {createExplorerAPI} from './explorer-api.mjs';
 import * as views from './view-loaders.mjs';
 import {createNavigation} from './navigation.mjs';
@@ -65,7 +65,7 @@ if (network) {
   document.title = `Xeris ${NETWORKS[network].name} Explorer`;
   document.getElementById('loading-title').textContent = `Connecting to ${NETWORKS[network].name}…`;
   document.getElementById('loading-detail').textContent = 'Checking the network and preparing your explorer.';
-  let explorerMounted = false, archiveMounted = false, connectionEpoch = 0;
+  let explorerMounted = false, archiveMounted = false, connectionEpoch = 0, recovery;
   const context = () => location.pathname + location.search;
   const showError = (message, startedAt = context(), error) => {
     if (startedAt !== context()) return;
@@ -85,6 +85,7 @@ if (network) {
         retryTimer = setTimeout(() => { retry.disabled = false; retry.textContent = 'Retry data'; }, error.retryAfterMs); }
       notice.append(retry);
     }
+    if (error?.retryable && explorerMounted) void recovery?.retry();
   };
   const showNotice = (message, startedAt) => { if (startedAt === context()) { notice.hidden = false; delete notice.dataset.transient; notice.textContent = message; } };
   const onFreshness = ({state, observedAtMs}) => {
@@ -94,6 +95,7 @@ if (network) {
   const api = createExplorerAPI(network, {onError: showError, onNotice: showNotice, onFreshness, getContext: context});
   window.XerisExplorerAPI = api;
   window.XerisExplorerFormat = rawUnits;
+  window.XerisExplorerUSD = compactUSD;
   window.XerisExplorerViews = views;
   window.XerisExplorerNavigation = (...args) => createNavigation(...args, {network});
   const historyClient = createHistoryClient(network);
@@ -165,11 +167,18 @@ if (network) {
         if (href !== corrected) link.setAttribute('href', corrected);
       }
     }
+    for (const region of document.querySelectorAll('#root .overflow-x-auto')) {
+      if (!region.hasAttribute('tabindex')) region.tabIndex = 0;
+      if (!region.hasAttribute('role')) region.setAttribute('role', 'region');
+      if (!region.hasAttribute('aria-label')) region.setAttribute('aria-label', 'Scrollable explorer data table');
+    }
   };
   new MutationObserver(rewriteLinks).observe(document.getElementById('root'), {childList: true, subtree: true, attributes: true, attributeFilter: ['href']});
   let connectionButton, connectionMessage, connectionPanel;
-  const recovery = createConnectionRecovery({
-    connect: () => api.ready(),
+  recovery = createConnectionRecovery({
+    // Once the UI has mounted, probe the live checkpoint again instead of
+    // trusting the identity promise cached during initial startup.
+    connect: () => explorerMounted ? api.probe() : api.ready(),
     onConnecting() {
       status.textContent = `${NETWORKS[network].name} · Reconnecting…`;
       setHealth('delayed');
@@ -180,10 +189,14 @@ if (network) {
       }
     },
     async onConnected() {
-    connectionEpoch++; archiveMounted = false; explorerMounted = true;
+    connectionEpoch++;
     status.textContent = `${NETWORKS[network].name} · Live`;
     setHealth('live', Date.now());
     if (notice.dataset.transient === 'true') { notice.hidden = true; notice.replaceChildren(); delete notice.dataset.transient; }
+    // A background probe recovered. Keep the mounted explorer and its last
+    // verified rows in place; its normal polling will refresh them.
+    if (explorerMounted) return;
+    archiveMounted = false;
     startup.hidden = false;
     root.setAttribute('aria-busy', 'true');
     const viewName = location.pathname === '/' ? 'blocks' : location.pathname.split('/')[1].replaceAll('-', ' ');
@@ -192,12 +205,25 @@ if (network) {
     const mounted = new MutationObserver(() => { if (root.childElementCount) {finishStartup();mounted.disconnect();} });
     mounted.observe(root, {childList: true});
     root.replaceChildren();
-    await import('/assets/explorer-ui.js');
+    try {
+      // A failed dynamic import is cached by browsers. A per-attempt URL lets a
+      // later healthy connection genuinely retry without a manual refresh.
+      await import(`/assets/explorer-ui.js?boot=${connectionEpoch}`);
+    } catch {
+      mounted.disconnect();
+      throw Object.assign(new Error('Explorer interface could not be loaded'), {code: 'UI_LOAD_ERROR', retryable: true});
+    }
+    explorerMounted = true;
     rewriteLinks();
     },
     onFailure(error, {retryable, serverDelay}) {
     status.textContent = `${NETWORKS[network].name} · ${retryable ? 'Data delayed' : 'Connection unavailable'}`;
     setHealth(retryable ? 'delayed' : 'unavailable');
+    if (explorerMounted && retryable) {
+      notice.hidden = false; notice.dataset.transient = 'true';
+      notice.textContent = 'Live updates are delayed. The last verified data remains visible while the explorer reconnects automatically.';
+      return;
+    }
     if (archiveMounted && retryable) {
       notice.hidden = false; notice.dataset.transient = 'true';
       notice.textContent = 'Showing the last verified Mainnet snapshot. Reconnecting automatically…';
@@ -224,6 +250,8 @@ if (network) {
     void mountArchiveFallback(error, epoch);
     }
   });
+  window.addEventListener('online', () => { void recovery.retry(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void recovery.retry(); });
   window.addEventListener('pagehide', () => { recovery.stop(); if (typeof healthTimer !== 'undefined') clearInterval(healthTimer); }, {once: true});
   // A restored document retains its stopped timers. Re-enter through the full
   // network identity check rather than reviving stale connection state.

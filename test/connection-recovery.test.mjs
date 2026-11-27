@@ -23,7 +23,16 @@ test('transient disconnection reconnects automatically with bounded exponential 
   while (ui.timers.size) { delays.push([...ui.timers.values()][0].delay); await ui.next(); }
   assert.deepEqual(delays, [5000, 10000, 20000, 30000, 30000, 30000]);
   assert.equal(attempts, 7); assert.equal(ui.events.at(-1), 'connected');
-  await ui.recovery.retry(); assert.equal(attempts, 7);
+  await ui.recovery.retry(); assert.equal(attempts, 8);
+});
+
+test('a recovered connection remains available for a later outage without a page reload', async () => {
+  let attempts = 0, offline = false;
+  const ui = harness(async () => { attempts++; if (offline) throw {code: 'TRANSPORT_ERROR', retryable: true}; });
+  await ui.recovery.start(); assert.equal(ui.events.at(-1), 'connected');
+  offline = true; await ui.recovery.retry(); assert.equal(ui.timers.size, 1);
+  offline = false; await ui.next();
+  assert.equal(attempts, 3); assert.equal(ui.events.at(-1), 'connected');
 });
 
 test('manual retry coalesces with a pending attempt and clears the automatic timer', async () => {

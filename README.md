@@ -24,12 +24,12 @@ To switch the launch default later, edit the single `DEFAULT_NETWORK` constant i
 
 Live browser reads use same-origin `/networks/<network>/…`; Mainnet archive reads use same-origin `/api/history/…`. The live Netlify function and local preview use the same fixed route validator. They permit only bounded explorer GET routes and an explicit read-only RPC method list. They reject write methods, unknown networks, arbitrary upstream URLs, excessive pagination, and redirects; they do not forward browser credentials. Responses have `Cache-Control: no-store` and an explicit network header. Failed reads never fall back to another chain or fabricate an empty successful response.
 
-Before loading the interface, each network must match its independently checked slot 27201 checkpoint:
+Before loading the interface, each network must match its independently checked slot 27201 checkpoint. Mainnet's live node window has aged past that slot, so the same-origin `/networks/mainnet/identity/checkpoint` Function route reads only the fixed archived record shown below. The Function requires the upstream `X-Xeris-Network` and `X-Xeris-Chain-Id` headers, `coverage.chain_id`, and exact pinned slot/hash before returning a minimal normalized identity response. It never accepts a browser-selected archive source.
 
-| Network | Fixed upstream | Checkpoint hash |
+| Network | Fixed identity source | Checkpoint hash |
 | --- | --- | --- |
-| Mainnet | `https://mainnetrpc.xerisweb.com` | `0a401c139eef73f049010450d4aa13ef38636799784d01bbc0ecdb9c71facaf3` |
-| Testnet | `http://138.197.116.81:50008` | `04a25302888ed7988efe33b427d9409ab6ba8c144cb0993ed515e57bbbef7fc7` |
+| Mainnet | `https://mainnetrpc.xerisweb.com/history/block/27201` | `0a401c139eef73f049010450d4aa13ef38636799784d01bbc0ecdb9c71facaf3` |
+| Testnet | `http://138.197.116.81:50008/v2/block/slot/27201` | `04a25302888ed7988efe33b427d9409ab6ba8c144cb0993ed515e57bbbef7fc7` |
 
 The Testnet upstream comes from the supplied existing deployment. Browser traffic remains HTTPS when hosted, but the function-to-legacy-testnet hop is currently HTTP. The supplied `https://rpc.xerisweb.com` did not expose usable explorer REST/JSON-RPC routes during verification. Moving the legacy upstream behind working HTTPS is a follow-up infrastructure change; this project does not alter servers or DNS. A pinned historic checkpoint prevents accidental network mixing; it is not cryptographic verification of every returned record.
 
@@ -49,11 +49,13 @@ Initial visits and network changes immediately display a connection screen with 
 
 Native transaction amounts and fees are formatted from exact raw integers. Only verified native transfer/stake instruction types receive an XRS amount label; token and other instructions link to details rather than mislabeling quantities as native money. Missing fees remain unavailable, including when the node provides no fee metadata. Indexed history is not presented as all-time account activity.
 
-Tests use synthetic public responses only. They cover checkpoint mismatch, explicit network routing, default selection, deep links, integer precision, request bounds, no write RPC, no credential forwarding, no cross-network fallback, stale supply, in-flight-only coalescing, and wrapped/native holder separation. Browser QA is performed against the local preview before publishing. This repository contains no signing keys, live journal, operator service, or node consensus changes.
+Tests use synthetic public responses only. They cover live-checkpoint eviction, archived Mainnet identity normalization, wrong archive network/chain/coverage/slot/hash rejection, Testnet live checkpoint validation, explicit network routing, default selection, deep links, integer precision, request bounds, no write RPC, no credential forwarding, no cross-network fallback, stale supply, in-flight-only coalescing, and wrapped/native holder separation. Browser QA is performed against the local preview before publishing. This repository contains no signing keys, live journal, operator service, or node consensus changes.
 
 ## Reliability audit follow-up
 
 The data adapter now distinguishes temporary transport/rate-limit failures from a verified checkpoint mismatch. A later explicit refresh can recover a temporary identity-read failure; a wrong checkpoint or network response header remains latched for that adapter instance. Requests do not automatically retry. Typed `ExplorerError` values expose `code`, `network`, `status`, `retryable`, and `retryAfterMs`; the proxy preserves HTTP 429/503 and a validated, bounded `Retry-After`. No cached response is used as a fallback.
+
+The browser connection controller continues operating after startup. A transient live-read failure retains the last verified screen, probes Mainnet's chain-bound archived checkpoint (or Testnet's live checkpoint) with bounded backoff, and clears the delayed state when the network recovers. Returning online or foregrounding the tab prompts an immediate eligible probe. Failed interface-module downloads use a fresh retry URL, so recovery does not require a manual page refresh; checkpoint or response-network/chain mismatches still fail closed.
 
 Optional live-supply reads and optional block-timestamp enrichment have a two-second deadline and do not produce a global page error. Primary account/history information must remain useful when enrichment is unavailable. Fetch and streamed-body deadlines are bounded even if cancellation does not finish. Invalid UTF-8 and oversized responses fail closed. Coalesced failures retain each caller's route context. Existing public API method return shapes remain compatible; `block(slot, {optional:true})` is an additive read-only option.
 

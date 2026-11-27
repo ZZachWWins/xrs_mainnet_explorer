@@ -51,6 +51,43 @@ test('proxy targets are fixed per-network and never accept a user upstream', () 
   assert.equal(routeRequest('/.netlify/functions/explorer/mainnet/v2/stats').network, 'mainnet');
   for (const path of ['/networks/other/v2/stats', '/networks/mainnet/https://evil.example', '/networks/mainnet/v2/stats?upstream=https://evil.example', '/networks/mainnet/%2e%2e/v2/stats']) assert.throws(() => routeRequest(path));
 });
+test('evicted Mainnet checkpoint identity is read only from its fixed archive route', () => {
+  const route = routeRequest('/networks/mainnet/identity/checkpoint');
+  assert.equal(route.url, 'https://mainnetrpc.xerisweb.com/history/block/27201');
+  assert.equal(route.archiveCheckpoint, true);
+  assert.equal(routeRequest('/networks/testnet/v2/block/slot/27201').url, 'http://138.197.116.81:50008/v2/block/slot/27201');
+  for (const request of ['/networks/testnet/identity/checkpoint', '/networks/mainnet/identity/checkpoint?page=1'])
+    assert.throws(() => routeRequest(request));
+  assert.throws(() => routeRequest('/networks/mainnet/identity/checkpoint', 'POST', '{}'));
+});
+test('archived checkpoint proxy validates transport and archive identity before normalizing', async () => {
+  const pin = NETWORKS.mainnet;
+  const valid = {coverage: {chain_id: pin.chainId}, data: {slot: pin.checkpointSlot, hash: pin.checkpointHash, transaction_count: 1}, generation: 'a'.repeat(64)};
+  const upstream = (value = valid, headers = {}) => new Response(JSON.stringify(value), {headers: {
+    'content-type': 'application/json', 'x-xeris-network': 'mainnet', 'x-xeris-chain-id': pin.chainId, ...headers}});
+  let requested;
+  const result = await proxyResponse(new Request('https://explorer.example/networks/mainnet/identity/checkpoint'), {
+    fetchImpl: async url => { requested = url; return upstream(); },
+  });
+  assert.equal(requested, 'https://mainnetrpc.xerisweb.com/history/block/27201');
+  assert.equal(result.status, 200);
+  assert.equal(result.headers.get('x-xeris-network'), 'mainnet');
+  assert.equal(result.headers.get('x-xeris-chain-id'), pin.chainId);
+  assert.deepEqual(await result.json(), {success: true, data: {slot: pin.checkpointSlot, hash: pin.checkpointHash}});
+
+  const wrong = [
+    () => upstream(valid, {'x-xeris-network': 'testnet'}),
+    () => upstream(valid, {'x-xeris-chain-id': 'xeris-mainnet-other'}),
+    () => upstream({...valid, coverage: {chain_id: 'xeris-mainnet-other'}}),
+    () => upstream({...valid, data: {...valid.data, slot: pin.checkpointSlot + 1}}),
+    () => upstream({...valid, data: {...valid.data, hash: NETWORKS.testnet.checkpointHash}}),
+  ];
+  for (const fixture of wrong) {
+    const refused = await proxyResponse(new Request('https://explorer.example/networks/mainnet/identity/checkpoint'), {fetchImpl: async () => fixture()});
+    assert.equal(refused.status, 502);
+    assert.equal((await refused.json()).success, false);
+  }
+});
 test('read-only proxy rejects mutation methods and transaction submission', () => {
   for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) assert.throws(() => routeRequest('/networks/mainnet/v2/tokens', method, '{}'));
   for (const method of ['sendTransaction', 'requestAirdrop', 'simulateTransaction']) assert.throws(() => routeRequest('/networks/mainnet/rpc', 'POST', JSON.stringify({jsonrpc: '2.0', id: 1, method, params: []})));
@@ -130,10 +167,12 @@ function apiFixture(network, overrides = {}) {
   const fetchImpl = async url => {
     calls.push(url);
     const suffix = url.slice(`/networks/${network}`.length);
-    const payload = suffix === '/v2/block/slot/27201' ? {success: true, data: {slot: 27201, hash: NETWORKS[network].checkpointHash}} :
+    const identityPath = network === 'mainnet' ? '/identity/checkpoint' : '/v2/block/slot/27201';
+    const payload = suffix === identityPath ? {success: true, data: {slot: 27201, hash: NETWORKS[network].checkpointHash}} :
       suffix === '/v2/stats' ? {success: true, data: {current_slot: 30000, validator_count: 3, total_staked: 3000000000000}} :
       overrides[suffix] || {success: true, data: []};
-    return new Response(JSON.stringify(payload), {headers: {'X-Xeris-Network': network}});
+    return new Response(JSON.stringify(payload), {headers: {'X-Xeris-Network': network,
+      ...(network === 'mainnet' && suffix === identityPath ? {'X-Xeris-Chain-Id': NETWORKS.mainnet.chainId} : {})}});
   };
   return {calls, fetchImpl};
 }
@@ -142,15 +181,27 @@ test('each API instance verifies its own network before requesting data', async 
     const fixture = apiFixture(network);
     const api = createExplorerAPI(network, fixture);
     await api.validators();
-    assert.deepEqual(fixture.calls, [`/networks/${network}/v2/block/slot/27201`, `/networks/${network}/v2/validators`]);
+    assert.deepEqual(fixture.calls, [network === 'mainnet' ? '/networks/mainnet/identity/checkpoint' : '/networks/testnet/v2/block/slot/27201', `/networks/${network}/v2/validators`]);
   }
+});
+test('a live probe bypasses the cached startup identity and can recover after transport loss', async () => {
+  let calls = 0, offline = false;
+  const api = createExplorerAPI('mainnet', {fetchImpl: async () => {
+    calls++;
+    if (offline) throw new Error('offline');
+    return new Response(JSON.stringify({success: true, data: {slot: 27201, hash: NETWORKS.mainnet.checkpointHash}}),
+      {headers: {'X-Xeris-Network': 'mainnet', 'X-Xeris-Chain-Id': NETWORKS.mainnet.chainId}});
+  }});
+  await api.ready(); await api.ready(); assert.equal(calls, 1);
+  offline = true; await assert.rejects(api.probe(), error => error.retryable === true);
+  offline = false; assert.equal(await api.probe(), true); assert.equal(calls, 3);
 });
 test('failed network identity blocks all subsequent API requests', async () => {
   const calls = [];
-  const api = createExplorerAPI('mainnet', {fetchImpl: async url => { calls.push(url); return new Response(JSON.stringify({success: true, data: {slot: 27201, hash: NETWORKS.testnet.checkpointHash}}), {headers: {'X-Xeris-Network': 'mainnet'}}); }});
+  const api = createExplorerAPI('mainnet', {fetchImpl: async url => { calls.push(url); return new Response(JSON.stringify({success: true, data: {slot: 27201, hash: NETWORKS.testnet.checkpointHash}}), {headers: {'X-Xeris-Network': 'mainnet', 'X-Xeris-Chain-Id': NETWORKS.mainnet.chainId}}); }});
   await assert.rejects(api.validators());
   await assert.rejects(api.tokens());
-  assert.deepEqual(calls, ['/networks/mainnet/v2/block/slot/27201']);
+  assert.deepEqual(calls, ['/networks/mainnet/identity/checkpoint']);
 });
 test('a response labelled as another network cannot populate the UI', async () => {
   const api = createExplorerAPI('mainnet', {fetchImpl: async () => new Response('{}', {headers: {'X-Xeris-Network': 'testnet'}})});
