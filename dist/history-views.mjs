@@ -80,9 +80,13 @@ export function createHistoryViews(React,Link,useLocation,client) {
         setState('copied');globalThis.setTimeout(()=>setState('idle'),1800);
       }catch{setState('error');globalThis.setTimeout(()=>setState('idle'),2200);}
     }
-    const text=state==='copied'?'Copied':state==='error'?'Try again':label;
+    const feedback=state==='copied'?'Copied':state==='error'?'Copy failed. Try again.':label;
+    const icon=h('svg',{viewBox:'0 0 24 24','aria-hidden':'true',focusable:'false'},
+      h('rect',{x:'9',y:'9',width:'10',height:'10',rx:'1'}),
+      h('path',{d:'M15 9V6a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3'}));
     return h('button',{type:'button',className:`history-copy${state==='copied'?' is-copied':''}`,onClick:copy,
-      'aria-label':`${label} ${shortIdentifier(value)}`,'aria-live':'polite'},text);
+      'aria-label':`${feedback} ${shortIdentifier(value)}`,title:feedback},icon,
+      h('span',{className:'sr-only','aria-live':'polite'},feedback));
   }
 
   function Identifier({value,to=null,compact=false,label='Copy'}) {

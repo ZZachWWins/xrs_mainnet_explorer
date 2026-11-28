@@ -176,3 +176,13 @@ button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{ou
 
 /* Public identifier copy controls remain full-size touch targets at every breakpoint. */
 .history-identifier-row .history-copy,.accounts-copy{min-height:44px;padding:8px 10px}
+
+/* Compact, familiar copy controls for public addresses and signatures. */
+.history-identifier-row .history-copy,.accounts-copy{
+ display:inline-flex;align-items:center;justify-content:center;width:44px;min-width:44px;min-height:44px;padding:0;
+ border-radius:2px;background:#111A45;color:#F0F2F5;white-space:nowrap;flex:0 0 auto
+}
+.history-copy.is-copied{border-color:#8FA3FF;background:#0A1550!important}
+.history-copy svg,.accounts-copy svg{
+ width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;pointer-events:none
+}

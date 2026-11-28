@@ -39,9 +39,13 @@ test('pool search opens the existing read-only contract detail and included tran
 
 test('built explorer carries compact mobile network, navigation and history table protections',async()=>{
   const css=await readFile(new URL('../dist/explorer.css',import.meta.url),'utf8');
+  const history=await readFile(new URL('../dist/history-views.mjs',import.meta.url),'utf8');
   assert.match(css,/@media\(max-width:480px\)[\s\S]*\.network-bar\{display:grid;grid-template-columns:minmax\(0,1fr\)/);
   assert.match(css,/@media\(max-width:900px\)[\s\S]*\.explorer-navigation\.is-open\{display:grid/);
   assert.match(css,/\.history-table-wrap:focus-visible/);
   assert.match(css,/\.history-table td\[data-label\]::before\{content:attr\(data-label\)/);
   assert.match(css,/\.accounts-copy\{min-height:44px/);
+  assert.match(css,/\.history-copy svg,\.accounts-copy svg\{/);
+  assert.match(history,/viewBox:'0 0 24 24'/);
+  assert.doesNotMatch(history,/aria-live':'polite'\},text\)/);
 });

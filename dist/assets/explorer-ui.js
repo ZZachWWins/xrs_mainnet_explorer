@@ -263,8 +263,12 @@ Error generating stack: `+s.message+`
 function XerisCopyPublicIdentifier({value,label="Copy"}){
   const[state,setState]=v.useState("idle");
   const copy=async()=>{try{if(!navigator.clipboard?.writeText)throw Error("Clipboard unavailable");await navigator.clipboard.writeText(String(value));setState("copied");setTimeout(()=>setState("idle"),1800)}catch{setState("error");setTimeout(()=>setState("idle"),2200)}};
-  const text=state==="copied"?"Copied":state==="error"?"Try again":label;
-  return v.createElement("button",{type:"button",className:"accounts-copy",onClick:copy,"aria-label":label+" "+value,"aria-live":"polite"},text)
+  const feedback=state==="copied"?"Copied":state==="error"?"Copy failed. Try again.":label;
+  const icon=v.createElement("svg",{viewBox:"0 0 24 24","aria-hidden":"true",focusable:"false"},
+    v.createElement("rect",{x:"9",y:"9",width:"10",height:"10",rx:"1"}),
+    v.createElement("path",{d:"M15 9V6a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3"}));
+  return v.createElement("button",{type:"button",className:"accounts-copy",onClick:copy,"aria-label":feedback+" "+value,title:feedback},icon,
+    v.createElement("span",{className:"sr-only","aria-live":"polite"},feedback))
 }
 function nv(){
   const api=window.XerisExplorerAPI,views=window.XerisExplorerViews,h=v.createElement;
