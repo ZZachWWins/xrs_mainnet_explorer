@@ -9,6 +9,29 @@ const reply = (value, network = 'mainnet', options = {}) => new Response(JSON.st
     ...(network === 'mainnet' ? {'x-xeris-chain-id': NETWORKS.mainnet.chainId} : {}), ...options.headers},
 });
 const identity = network => reply({success: true, data: {slot: 27201, hash: NETWORKS[network].checkpointHash}}, network);
+const memoryStorage = () => {
+  const values = new Map();
+  return {getItem:key=>values.has(key)?values.get(key):null,setItem:(key,value)=>values.set(key,String(value)),removeItem:key=>values.delete(key)};
+};
+
+test('verified route data survives a transient outage and remains isolated by network', async () => {
+  const cacheStorage=memoryStorage(),freshness=[];let offline=false;
+  const fetchImpl=async url=>{
+    if(offline)throw new TypeError('Synthetic outage');
+    if(url.endsWith('/identity/checkpoint'))return identity('mainnet');
+    if(url.endsWith('/v2/validators'))return reply({success:true,data:[{address:'validator-one'}]});
+    throw new Error('Unexpected route '+url);
+  };
+  const live=createExplorerAPI('mainnet',{cacheStorage,fetchImpl});
+  assert.deepEqual(await live.validators(),[{address:'validator-one'}]);
+  offline=true;
+  const retained=createExplorerAPI('mainnet',{cacheStorage,fetchImpl,onFreshness:value=>freshness.push(value)});
+  assert.deepEqual(await retained.validators(),[{address:'validator-one'}]);
+  assert.ok(freshness.some(value=>value.state==='stale'&&value.path==='/identity/checkpoint'));
+  assert.ok(freshness.some(value=>value.state==='stale'&&value.path==='/v2/validators'));
+  const testnet=createExplorerAPI('testnet',{cacheStorage,fetchImpl});
+  await assert.rejects(testnet.ready(),error=>error.retryable===true);
+});
 
 test('one transient identity failure can recover without permitting another chain', async () => {
   const calls = []; let fail = true;
@@ -33,6 +56,33 @@ test('429 identity errors retain retry instructions and do not automatically ret
   }});
   await assert.rejects(api.ready(), e => e.code === 'RATE_LIMITED' && e.status === 429 && e.retryAfterMs === 9000 && e.retryable);
   assert.equal(calls, 1);
+});
+
+test('retained route data honors per-path Retry-After without blocking other routes', async () => {
+  const cacheStorage=memoryStorage();let clock=10_000,validatorCalls=0,blockCalls=0,busy=false;
+  const fetchImpl=async url=>{
+    if(url.endsWith('/identity/checkpoint'))return identity('mainnet');
+    if(url.endsWith('/v2/validators')){
+      validatorCalls++;
+      if(busy)return reply({},'mainnet',{status:503,headers:{'retry-after':'30'}});
+      return reply({success:true,data:[{address:'validator-one'}]});
+    }
+    if(url.endsWith('/v2/blocks?page=1&page_size=10')){blockCalls++;return reply({success:true,data:[]});}
+    throw new Error('Unexpected route '+url);
+  };
+  const api=createExplorerAPI('mainnet',{cacheStorage,fetchImpl,now:()=>clock});
+  assert.equal((await api.validators())[0].address,'validator-one');
+  busy=true;
+  assert.equal((await api.validators())[0].address,'validator-one');
+  assert.equal(validatorCalls,2);
+  clock+=29_999;
+  assert.equal((await api.validators())[0].address,'validator-one');
+  assert.equal(validatorCalls,2,'cached fallback must not re-probe before Retry-After');
+  assert.deepEqual(await api.blocks(),[]);
+  assert.equal(blockCalls,1,'backoff must remain isolated to the failed path');
+  clock+=1;busy=false;
+  assert.equal((await api.validators())[0].address,'validator-one');
+  assert.equal(validatorCalls,3);
 });
 
 test('actual checkpoint/header mismatches remain latched even if next response would be valid', async () => {

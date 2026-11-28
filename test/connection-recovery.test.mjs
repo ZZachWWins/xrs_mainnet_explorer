@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {createConnectionRecovery} from '../src/connection-recovery.mjs';
+import {createConnectionRecovery, createFreshnessState} from '../src/connection-recovery.mjs';
 
 function harness(connect) {
   let clock = 0, sequence = 0;
@@ -52,6 +52,19 @@ test('server Retry-After cannot be bypassed by manual retry', async () => {
   await ui.next(); assert.equal(attempts, 2); assert.equal(ui.events.at(-1), 'connected');
 });
 
+test('one live path cannot mark the explorer live while another displayed path remains stale', () => {
+  const freshness = createFreshnessState();
+  assert.deepEqual(freshness.update({state:'stale',path:'/market/supply',observedAtMs:1000}), {
+    state:'stale',observedAtMs:1000,staleCount:1,stalePaths:['/market/supply'],
+  });
+  const mixed = freshness.update({state:'live',path:'/v2/stats',observedAtMs:5000});
+  assert.equal(mixed.state,'stale');assert.equal(mixed.observedAtMs,1000);assert.equal(mixed.staleCount,1);
+  const twoStale = freshness.update({state:'stale',path:'/v2/validators',observedAtMs:3000});
+  assert.equal(twoStale.state,'stale');assert.equal(twoStale.observedAtMs,1000);assert.equal(twoStale.staleCount,2);
+  assert.deepEqual(freshness.retain(['/v2/validators']).stalePaths,['/v2/validators']);
+  assert.equal(freshness.update({state:'live',path:'/v2/validators',observedAtMs:6000}).state,'live');
+});
+
 test('network identity and malformed-response failures never retry automatically', async () => {
   for (const code of ['NETWORK_MISMATCH', 'INVALID_RESPONSE']) {
     const ui = harness(async () => { throw {code, retryable: false}; });
@@ -71,13 +84,22 @@ test('navigation cancels scheduled work and ignores a late connection result', a
 test('restoring a stopped document from browser history rechecks its network through a reload', () => {
   const source = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
   const start = source.indexOf("window.addEventListener('pagehide'");
-  const end = source.indexOf('void recovery.start();', start);
+  const end = source.indexOf('void mountExplorer()', start);
   assert.ok(start > 0 && end > start);
   const handlers = new Map(); let stopped = 0, reloaded = 0;
-  Function('window', 'recovery', 'location', source.slice(start, end))(
+  Function('window', 'recovery', 'location', 'freshnessRetryTimer', source.slice(start, end))(
     {addEventListener: (name, handler) => handlers.set(name, handler)},
-    {stop: () => stopped++}, {reload: () => reloaded++});
+    {stop: () => stopped++}, {reload: () => reloaded++}, 0);
   handlers.get('pageshow')({persisted: false}); assert.equal(reloaded, 0);
   handlers.get('pagehide')(); assert.equal(stopped, 1);
   handlers.get('pageshow')({persisted: true}); assert.equal(reloaded, 1);
+});
+
+test('the normal explorer shell mounts before network recovery and failures retain it', () => {
+  const source = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  const mount = source.lastIndexOf('void mountExplorer()'), recovery = source.lastIndexOf('void recovery.start()');
+  assert.ok(mount > 0 && recovery > mount);
+  const failure = source.slice(source.indexOf('onFailure(error'), source.indexOf("window.addEventListener('online'"));
+  assert.ok(failure.indexOf('if (explorerMounted || mountPromise)') < failure.indexOf("document.createElement('main')"));
+  assert.match(failure, /Unverified updates will not be displayed/);
 });

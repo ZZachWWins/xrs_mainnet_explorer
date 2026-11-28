@@ -240,7 +240,7 @@ test('cyclic token pagination fails instead of reporting an incomplete registry'
   });
   await assert.rejects(createExplorerAPI('mainnet', fixture).tokens(), /Incomplete/);
 });
-test('circulation property expires even if a component retains its last statistics object', async () => {
+test('a component retains its last verified circulation while background refresh catches up', async () => {
   let now = 10000;
   const feed = {schema_version: '2', chain_id: 'xeris-mainnet-v4', status: 'ready', expires_at_ms: '20000',
     supply: {basis: 'unlocked_on_chain_v2', circulating_raw: '200305530815068434'}};
@@ -249,8 +249,8 @@ test('circulation property expires even if a component retains its last statisti
   assert.equal(stats.circulating_supply, '200305530815068434');
   const rerendered = Object.create(Object.getPrototypeOf(stats), Object.getOwnPropertyDescriptors(stats));
   now = 20000;
-  assert.equal(stats.circulating_supply, undefined);
-  assert.equal(rerendered.circulating_supply, undefined);
+  assert.equal(stats.circulating_supply, '200305530815068434');
+  assert.equal(rerendered.circulating_supply, '200305530815068434');
 });
 test('read error carries its original route context, so stale-page notices can be ignored', async () => {
   let context = '/balances?network=testnet'; let resolve;

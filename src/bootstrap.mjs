@@ -4,7 +4,7 @@ import * as views from './view-loaders.mjs';
 import {createNavigation} from './navigation.mjs';
 import {createHistoryClient} from './history-client.mjs';
 import {createHistoryViews} from './history-views.mjs';
-import {createConnectionRecovery} from './connection-recovery.mjs';
+import {createConnectionRecovery, createFreshnessState} from './connection-recovery.mjs';
 
 const status = document.getElementById('network-status');
 const freshness = document.getElementById('network-freshness');
@@ -21,7 +21,7 @@ const finishStartup = () => {
     if (restoreFocus) content.focus({preventScroll:true});
   }
 };
-let retryTimer;
+let retryTimer, freshnessRetryTimer;
 let healthTimer, healthStartedAt, lastVerifiedAt, healthState = 'verifying';
 const duration = milliseconds => {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -33,7 +33,7 @@ const paintHealth = () => {
   if (!freshness) return;
   const session = healthStartedAt ? duration(Date.now() - healthStartedAt) : '--:--:--';
   freshness.textContent = healthState === 'delayed' && lastVerifiedAt
-    ? `Session ${session} · Last verified ${age(Date.now() - lastVerifiedAt)}`
+    ? `Session ${session} · Updating · Last verified ${age(Date.now() - lastVerifiedAt)}`
     : `Session ${session}${lastVerifiedAt ? ` · Updated ${age(Date.now() - lastVerifiedAt)}` : ''}`;
 };
 const setHealth = (state, observedAtMs = lastVerifiedAt) => {
@@ -64,33 +64,43 @@ if (network) {
   document.documentElement.dataset.network = network;
   document.title = `Xeris ${NETWORKS[network].name} Explorer`;
   document.getElementById('loading-title').textContent = `Connecting to ${NETWORKS[network].name}…`;
-  document.getElementById('loading-detail').textContent = 'Checking the network and preparing your explorer.';
-  let explorerMounted = false, archiveMounted = false, connectionEpoch = 0, recovery;
+  document.getElementById('loading-detail').textContent = 'Preparing the latest verified data.';
+  let explorerMounted = false, archiveMounted = false, connectionEpoch = 0, mountPromise, recovery;
+  const freshnessState = createFreshnessState();
+  const checkpointPath = network === 'mainnet' ? '/identity/checkpoint'
+    : `/v2/block/slot/${NETWORKS[network].checkpointSlot}`;
   const context = () => location.pathname + location.search;
   const showError = (message, startedAt = context(), error) => {
     if (startedAt !== context()) return;
     clearTimeout(retryTimer);
     if (error?.retryable) setHealth('delayed');
+    if (error?.retryable && (explorerMounted || mountPromise)) {
+      notice.hidden = true; notice.replaceChildren(); delete notice.dataset.transient;
+      void recovery?.retry();
+      return;
+    }
     notice.hidden = false; notice.replaceChildren();
     notice.dataset.transient = 'true';
     const text = document.createElement('span');
-    text.textContent = error?.retryable && explorerMounted ? 'Live updates are delayed. The last verified data remains visible while the explorer reconnects automatically.' :
-      error?.code === 'UNSUPPORTED_ENDPOINT' ? `This information is not available from the ${NETWORKS[network].name} endpoint.` :
-      error?.code === 'RATE_LIMITED' ? 'The network is handling many requests. Please retry shortly.' : message;
+    text.textContent = error?.code === 'UNSUPPORTED_ENDPOINT' ? `This view is not provided on ${NETWORKS[network].name}.` :
+      error?.code === 'RATE_LIMITED' ? 'Updates are taking longer than usual.' : message;
     notice.append(text);
-    if (error?.code !== 'UNSUPPORTED_ENDPOINT' && !(error?.retryable && explorerMounted)) {
-      const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Retry data';
+    if (error?.code !== 'UNSUPPORTED_ENDPOINT' && !(error?.retryable && (explorerMounted || mountPromise))) {
+      const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Refresh';
       retry.onclick = () => location.reload();
-      if (error?.retryAfterMs > 0) { retry.disabled = true; retry.textContent = 'Retry shortly';
-        retryTimer = setTimeout(() => { retry.disabled = false; retry.textContent = 'Retry data'; }, error.retryAfterMs); }
+      if (error?.retryAfterMs > 0) { retry.disabled = true; retry.textContent = 'Refreshing soon';
+        retryTimer = setTimeout(() => { retry.disabled = false; retry.textContent = 'Refresh'; }, error.retryAfterMs); }
       notice.append(retry);
     }
-    if (error?.retryable && explorerMounted) void recovery?.retry();
+    if (error?.retryable && (explorerMounted || mountPromise)) void recovery?.retry();
   };
   const showNotice = (message, startedAt) => { if (startedAt === context()) { notice.hidden = false; delete notice.dataset.transient; notice.textContent = message; } };
-  const onFreshness = ({state, observedAtMs}) => {
-    setHealth(state === 'stale' ? 'delayed' : 'live', observedAtMs);
-    if (state !== 'stale' && notice.dataset.transient === 'true') { notice.hidden = true; notice.replaceChildren(); delete notice.dataset.transient; }
+  const onFreshness = ({state, observedAtMs, path, retryAfterMs = 0}) => {
+    const summary = freshnessState.update({state, observedAtMs, path});
+    setHealth(summary.state === 'stale' ? 'delayed' : 'live', summary.observedAtMs);
+    clearTimeout(freshnessRetryTimer);
+    if (summary.state === 'stale') freshnessRetryTimer = setTimeout(() => { void recovery?.retry(); }, Math.max(5000, retryAfterMs));
+    else if (notice.dataset.transient === 'true') { notice.hidden = true; notice.replaceChildren(); delete notice.dataset.transient; }
   };
   const api = createExplorerAPI(network, {onError: showError, onNotice: showNotice, onFreshness, getContext: context});
   window.XerisExplorerAPI = api;
@@ -114,9 +124,9 @@ if (network) {
     const heading = document.createElement('h1'); heading.textContent = 'Explorer data is catching up';
     const explanation = document.createElement('p'); explanation.textContent = 'Live node updates are temporarily delayed. The most recent integrity-checked archive remains available while reconnection continues.';
     const summary = document.createElement('dl'); summary.className = 'archive-summary';
-    for (const [label, value] of [['Verified through', coverage?.tip?.slot ? `Block ${coverage.tip.slot.toLocaleString()}` : 'Unavailable'],
-      ['Indexed blocks', Number.isSafeInteger(coverage?.counts?.blocks) ? coverage.counts.blocks.toLocaleString() : 'Unavailable'],
-      ['Indexed transactions', Number.isSafeInteger(coverage?.counts?.transactions) ? coverage.counts.transactions.toLocaleString() : 'Unavailable']]) {
+    for (const [label, value] of [['Verified through', coverage?.tip?.slot ? `Block ${coverage.tip.slot.toLocaleString()}` : '—'],
+      ['Indexed blocks', Number.isSafeInteger(coverage?.counts?.blocks) ? coverage.counts.blocks.toLocaleString() : '—'],
+      ['Indexed transactions', Number.isSafeInteger(coverage?.counts?.transactions) ? coverage.counts.transactions.toLocaleString() : '—']]) {
       const item = document.createElement('div'), term = document.createElement('dt'), detail = document.createElement('dd');
       term.textContent = label; detail.textContent = value; item.append(term, detail); summary.append(item);
     }
@@ -150,11 +160,15 @@ if (network) {
       const linked = networkLink(target, network, location.href);
       notice.hidden = true;
       clearTimeout(retryTimer);
+      const summary = freshnessState.retain([checkpointPath]);
+      setHealth(summary.state === 'stale' ? 'delayed' : 'live', summary.observedAtMs);
       return original(state, unused, linked);
     };
   }
   originalReplace(history.state, '', networkLink(location.href, network, location.href));
   window.addEventListener('popstate', () => {
+    const summary = freshnessState.retain([checkpointPath]);
+    setHealth(summary.state === 'stale' ? 'delayed' : 'live', summary.observedAtMs);
     try { if (selectedNetwork(location.href) !== network) location.reload(); }
     catch { location.reload(); }
   });
@@ -175,72 +189,80 @@ if (network) {
   };
   new MutationObserver(rewriteLinks).observe(document.getElementById('root'), {childList: true, subtree: true, attributes: true, attributeFilter: ['href']});
   let connectionButton, connectionMessage, connectionPanel;
+  const mountExplorer = () => {
+    if (explorerMounted) return Promise.resolve();
+    if (mountPromise) return mountPromise;
+    connectionEpoch++;
+    startup.hidden = false;
+    root.setAttribute('aria-busy', 'true');
+    const viewName = location.pathname === '/' ? 'blocks' : location.pathname.split('/')[1].replaceAll('-', ' ');
+    document.getElementById('loading-title').textContent = `Loading ${viewName}…`;
+    document.getElementById('loading-detail').textContent = 'Preparing the latest verified data.';
+    const mounted = new MutationObserver(() => { if (root.childElementCount) { finishStartup(); mounted.disconnect(); } });
+    mounted.observe(root, {childList: true});
+    root.replaceChildren();
+    const attempt = import(`/assets/explorer-ui.js?boot=${connectionEpoch}`).then(() => {
+      explorerMounted = true; archiveMounted = false; connectionPanel = connectionButton = connectionMessage = null; rewriteLinks();
+    }).catch(() => {
+      mounted.disconnect();
+      throw Object.assign(new Error('Explorer interface could not be loaded'), {code: 'UI_LOAD_ERROR', retryable: true});
+    });
+    const wrapped = attempt.finally(() => { if (mountPromise === wrapped) mountPromise = null; });
+    mountPromise = wrapped;
+    return mountPromise;
+  };
   recovery = createConnectionRecovery({
     // Once the UI has mounted, probe the live checkpoint again instead of
     // trusting the identity promise cached during initial startup.
     connect: () => explorerMounted ? api.probe() : api.ready(),
     onConnecting() {
-      status.textContent = `${NETWORKS[network].name} · Reconnecting…`;
+      status.textContent = `${NETWORKS[network].name} · Updating`;
       setHealth('delayed');
       if (connectionPanel) {
         connectionButton.disabled = true;
-        connectionButton.textContent = 'Retrying connection…';
-        connectionMessage.textContent = 'Reconnecting automatically. This may take a moment…';
+        connectionButton.textContent = 'Updating…';
+        connectionMessage.textContent = 'Latest verified data will appear here automatically.';
       }
     },
     async onConnected() {
-    connectionEpoch++;
-    status.textContent = `${NETWORKS[network].name} · Live`;
-    setHealth('live', Date.now());
+    await mountExplorer();
+    status.textContent = `${NETWORKS[network].name} · ${healthState === 'delayed' ? 'Updating' : 'Live'}`;
+    if (healthState !== 'delayed') setHealth('live', Date.now());
     if (notice.dataset.transient === 'true') { notice.hidden = true; notice.replaceChildren(); delete notice.dataset.transient; }
     // A background probe recovered. Keep the mounted explorer and its last
     // verified rows in place; its normal polling will refresh them.
-    if (explorerMounted) return;
-    archiveMounted = false;
-    startup.hidden = false;
-    root.setAttribute('aria-busy', 'true');
-    const viewName = location.pathname === '/' ? 'blocks' : location.pathname.split('/')[1].replaceAll('-', ' ');
-    document.getElementById('loading-title').textContent = `Loading ${viewName}…`;
-    document.getElementById('loading-detail').textContent = `Retrieving data from Xeris ${NETWORKS[network].name}.`;
-    const mounted = new MutationObserver(() => { if (root.childElementCount) {finishStartup();mounted.disconnect();} });
-    mounted.observe(root, {childList: true});
-    root.replaceChildren();
-    try {
-      // A failed dynamic import is cached by browsers. A per-attempt URL lets a
-      // later healthy connection genuinely retry without a manual refresh.
-      await import(`/assets/explorer-ui.js?boot=${connectionEpoch}`);
-    } catch {
-      mounted.disconnect();
-      throw Object.assign(new Error('Explorer interface could not be loaded'), {code: 'UI_LOAD_ERROR', retryable: true});
-    }
-    explorerMounted = true;
-    rewriteLinks();
+    return;
     },
     onFailure(error, {retryable, serverDelay}) {
-    status.textContent = `${NETWORKS[network].name} · ${retryable ? 'Data delayed' : 'Connection unavailable'}`;
+    status.textContent = `${NETWORKS[network].name} · ${retryable ? 'Updating' : 'Verification required'}`;
     setHealth(retryable ? 'delayed' : 'unavailable');
-    if (explorerMounted && retryable) {
-      notice.hidden = false; notice.dataset.transient = 'true';
-      notice.textContent = 'Live updates are delayed. The last verified data remains visible while the explorer reconnects automatically.';
+    if (explorerMounted || mountPromise) {
+      if (retryable) { notice.hidden = true; notice.replaceChildren(); delete notice.dataset.transient; }
+      else {
+        notice.hidden = false; notice.dataset.transient = 'true'; notice.replaceChildren();
+        const message = document.createElement('span');
+        message.textContent = 'Network verification is paused. Unverified updates will not be displayed.';
+        notice.append(message);
+      }
       return;
     }
     if (archiveMounted && retryable) {
       notice.hidden = false; notice.dataset.transient = 'true';
-      notice.textContent = 'Showing the last verified Mainnet snapshot. Reconnecting automatically…';
+      notice.textContent = 'Showing the latest verified Mainnet snapshot while updates continue.';
       return;
     }
     const epoch = ++connectionEpoch;
     notice.hidden = true;
     const panel = document.createElement('main'); panel.className = 'connection-panel'; panel.id = 'explorer-content'; panel.tabIndex = -1;
-    const heading = document.createElement('h1'); heading.textContent = 'Network data is unavailable';
+    const heading = document.createElement('h1'); heading.textContent = retryable ? 'Connecting to Xeris' : 'Network verification required';
     const text = document.createElement('p'); text.textContent = error?.code === 'NETWORK_MISMATCH'
-      ? 'This endpoint did not match the selected network. Data display has been stopped.'
-      : `We could not connect to Xeris ${NETWORKS[network].name}.`;
+      ? 'The selected network could not be verified. Display remains paused to protect data integrity.'
+      : `Preparing the latest verified ${NETWORKS[network].name} data.`;
     const hint = document.createElement('p');
-    hint.textContent = 'The network may be experiencing heavy load, or your internet connection may not be optimal.';
+    hint.textContent = 'Your most recent verified data will remain visible whenever it has been loaded before.';
     const message = document.createElement('p'); message.setAttribute('role', 'status'); message.setAttribute('aria-live', 'polite');
-    message.textContent = retryable ? 'We’ll retry automatically. This may take a moment…' : 'Retry the connection when you are ready.';
-    const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Retry connection';
+    message.textContent = retryable ? 'Updating automatically. This may take a moment…' : 'Refresh when you are ready.';
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Refresh';
     button.disabled = retryable && serverDelay > 0;
     button.onclick = () => { if (retryable) void recovery.retry(); else location.reload(); };
     panel.append(heading, text);
@@ -252,9 +274,10 @@ if (network) {
   });
   window.addEventListener('online', () => { void recovery.retry(); });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void recovery.retry(); });
-  window.addEventListener('pagehide', () => { recovery.stop(); if (typeof healthTimer !== 'undefined') clearInterval(healthTimer); }, {once: true});
+  window.addEventListener('pagehide', () => { recovery.stop(); clearTimeout(freshnessRetryTimer); if (typeof healthTimer !== 'undefined') clearInterval(healthTimer); }, {once: true});
   // A restored document retains its stopped timers. Re-enter through the full
   // network identity check rather than reviving stale connection state.
   window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
+  void mountExplorer().catch(() => { /* Recovery presents the bounded UI-load failure state. */ });
   void recovery.start();
 }

@@ -1,4 +1,4 @@
-import {validateAccountAges, validateAccountPrice} from './accounts.mjs';
+import {validateAccountAges, validateAccountPrice, validateStoredAccountPrice} from './accounts.mjs';
 import {NETWORKS, parsePublicJSON, verifyCheckpoint} from './network.mjs';
 
 export class ExplorerError extends Error {
@@ -13,11 +13,48 @@ export function retryAfterMilliseconds(value, now = Date.now()) {
   return Number.isFinite(delay) ? Math.min(86_400_000, Math.max(0, Math.ceil(delay))) : 0;
 }
 
-export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {}, onNotice = () => {}, onFreshness = () => {}, now = Date.now, getContext = () => '', readTimeoutMs, supplyTimeoutMs = 2000} = {}) {
+export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {}, onNotice = () => {}, onFreshness = () => {}, now = Date.now, getContext = () => '', readTimeoutMs, supplyTimeoutMs = 2000, cacheStorage} = {}) {
   if (!Object.hasOwn(NETWORKS, network)) throw new Error('Unknown network');
   const prefix = `/networks/${network}`;
   let identity, bindingFailure, lastSupply;
   const pending = new Map();
+  const stalePaths = new Set();
+  const retryNotBefore = new Map(), retryFailures = new Map();
+  if (cacheStorage === undefined) { try { cacheStorage = globalThis.localStorage; } catch { cacheStorage = null; } }
+  const cacheKey = path => `xeris:explorer:verified:v1:${network}:${encodeURIComponent(path)}`;
+  const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+  const cached = path => {
+    try {
+      if (!cacheStorage?.getItem) return null;
+      const raw = cacheStorage.getItem(cacheKey(path));
+      if (raw === null) return null;
+      if (typeof raw !== 'string' || raw.length > 1_048_576) throw new Error('Invalid cache entry');
+      const envelope = parsePublicJSON(raw);
+      if (!exactKeys(envelope, ['version','network','path','observedAtMs','value']) || envelope.version !== 1 ||
+          envelope.network !== network || envelope.path !== path || !Number.isSafeInteger(envelope.observedAtMs) ||
+          envelope.observedAtMs <= 0 || envelope.observedAtMs > now() + 2000 || !envelope.value ||
+          typeof envelope.value !== 'object' || Array.isArray(envelope.value)) throw new Error('Invalid cache entry');
+      return envelope;
+    } catch {
+      try { cacheStorage?.removeItem?.(cacheKey(path)); } catch { /* Storage is optional. */ }
+      return null;
+    }
+  };
+  const remember = (path, value, observedAtMs) => {
+    try {
+      if (!cacheStorage?.setItem) return;
+      const encoded = JSON.stringify({version:1, network, path, observedAtMs, value});
+      if (encoded.length <= 1_048_576) cacheStorage.setItem(cacheKey(path), encoded);
+    } catch { /* A full or unavailable cache never interrupts verified live reads. */ }
+  };
+  const retained = (path, retryAfterMs = 0) => {
+    const value = cached(path);
+    if (!value) return null;
+    stalePaths.add(path);
+    try { onFreshness({state:'stale', observedAtMs:value.observedAtMs, path, retryAfterMs}); } catch { /* Presentation callbacks never invalidate verified data. */ }
+    return value.value;
+  };
   const error = (message, options) => new ExplorerError(message, {network, ...options});
   // Mainnet's node keeps only a recent live window, so its pinned historic
   // identity is exposed by a dedicated same-origin Function route. Testnet's
@@ -30,6 +67,14 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
     try {
       if (!identityCheck) await ready();
       if (bindingFailure) throw bindingFailure;
+      const notBefore = retryNotBefore.get(path) || 0;
+      if (notBefore > now()) {
+        const value = retained(path, notBefore - now());
+        if (value) return value;
+        throw retryFailures.get(path) || error(`${NETWORKS[network].name}: updates are temporarily delayed`,
+          {code:'RATE_LIMITED', retryable:true, retryAfterMs:notBefore-now()});
+      }
+      if (notBefore) { retryNotBefore.delete(path); retryFailures.delete(path); }
       if (!pending.has(pendingKey)) {
         const task = (async () => {
           const controller = new AbortController(); let timer;
@@ -72,14 +117,26 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
             const state = response.headers.get('x-xeris-data-state') === 'stale' ? 'stale' : 'live';
             const headerTime = Number(response.headers.get('x-xeris-observed-at'));
             const observedAtMs = Number.isSafeInteger(headerTime) && headerTime > 0 && headerTime <= now() ? headerTime : now();
+            stalePaths[state === 'stale' ? 'add' : 'delete'](path);
+            retryNotBefore.delete(path); retryFailures.delete(path);
+            remember(path, result, observedAtMs);
             try { onFreshness({state, observedAtMs, path}); } catch { /* Presentation callbacks never invalidate verified data. */ }
             if (bindingFailure) throw bindingFailure;
             return result;
           } catch (cause) {
             if (reader) void reader.cancel().catch(() => {});
-            if (cause?.code === 'NETWORK_MISMATCH') bindingFailure = cause;
-            if (cause instanceof ExplorerError) throw cause;
-            throw error(`${NETWORKS[network].name}: this data is currently unavailable`, {code: controller.signal.aborted ? 'TIMEOUT' : 'TRANSPORT_ERROR', retryable: true});
+            if (cause?.code === 'NETWORK_MISMATCH') {
+              bindingFailure = cause;
+              try { cacheStorage?.removeItem?.(cacheKey(path)); } catch { /* Storage is optional. */ }
+            }
+            const failure = cause instanceof ExplorerError ? cause :
+              error(`${NETWORKS[network].name}: this data is currently unavailable`, {code: controller.signal.aborted ? 'TIMEOUT' : 'TRANSPORT_ERROR', retryable: true});
+            if (failure.retryable && failure.retryAfterMs > 0) {
+              retryNotBefore.set(path, now() + failure.retryAfterMs); retryFailures.set(path, failure);
+            }
+            const previous = failure.retryable ? retained(path, failure.retryAfterMs) : null;
+            if (previous) return previous;
+            throw failure;
           } finally { clearTimeout(timer); }
         })();
         pending.set(pendingKey, task);
@@ -100,6 +157,7 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
     catch {
       const mismatch = error('Network checkpoint mismatch; data display stopped', {code: 'NETWORK_MISMATCH'});
       bindingFailure = mismatch;
+      try { cacheStorage?.removeItem?.(cacheKey(checkpointPath)); } catch { /* Storage is optional. */ }
       throw mismatch;
     }
   }
@@ -135,11 +193,13 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
     const result = {...response.data, num_validators: response.data.validator_count};
     if (network === 'mainnet') {
       try {
-        const feed = await read('/market/supply', {reportError: false, timeoutMs: supplyTimeoutMs});
+        const supplyPath = '/market/supply';
+        const feed = await read(supplyPath, {reportError: false, timeoutMs: supplyTimeoutMs});
+        const retainedFeed = stalePaths.has(supplyPath);
         const market = feed.market;
         if (feed.schema_version !== '2' || feed.chain_id !== 'xeris-mainnet-v4' || feed.status !== 'ready' ||
             feed.supply?.basis !== 'unlocked_on_chain_v2' || !/^[0-9]+$/.test(feed.supply?.circulating_raw) ||
-            !/^[0-9]+$/.test(feed.expires_at_ms) || BigInt(feed.expires_at_ms) <= BigInt(now())) throw new Error('Live circulating supply unavailable');
+            !/^[0-9]+$/.test(feed.expires_at_ms) || !retainedFeed && BigInt(feed.expires_at_ms) <= BigInt(now())) throw new Error('Live circulating supply unavailable');
         let marketCapRaw, marketCapDecimals;
         if (market?.token_id === 'native_xrs' && market?.quote_token_id === 'xeris_usdc' &&
             market?.valuation_basis === 'circulating_supply' && market?.price_basis === 'pool_spot' &&
@@ -155,20 +215,19 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
         }
         lastSupply = {raw: feed.supply.circulating_raw, expires: BigInt(feed.expires_at_ms),
           observedAt: feed.observed_at, mined: feed.mining?.total_mined_raw,
-          marketCapRaw, marketCapDecimals};
+          marketCapRaw, marketCapDecimals, stale: retainedFeed};
       } catch (cause) {
-        // A brief transport failure must not erase an observation that is still
-        // within its original validity period. Invalid data is never retained.
+        // A transport failure must not erase the last verified presentation
+        // value. Invalid or wrong-chain data still clears it immediately.
         if (!(cause instanceof ExplorerError && cause.retryable)) lastSupply = undefined;
       }
-      if (lastSupply && BigInt(now()) < lastSupply.expires) {
+      if (lastSupply) {
         const observed = lastSupply;
-        Object.defineProperty(result, 'circulating_supply', {enumerable: true,
-          get: () => BigInt(now()) < observed.expires ? observed.raw : undefined});
-        Object.defineProperty(result, 'market_cap_quote_raw', {enumerable: true,
-          get: () => BigInt(now()) < observed.expires ? observed.marketCapRaw : undefined});
+        result.circulating_supply = observed.raw;
+        result.market_cap_quote_raw = observed.marketCapRaw;
         result.market_cap_quote_decimals = observed.marketCapDecimals;
         result.supply_observed_at = observed.observedAt;
+        result.supply_stale = observed.stale || BigInt(now()) >= observed.expires;
         // Gross emitted amount is not labelled circulating or outstanding supply.
         result.total_mined_raw = observed.mined;
       } else lastSupply = undefined;
@@ -189,8 +248,12 @@ export function createExplorerAPI(network, {fetchImpl = fetch, onError = () => {
     accountAges: async () => network === 'mainnet'
       ? validateAccountAges(await read('/history/accounts', {reportError:false}))
       : {data:[],basis:'unavailable',truncated:false},
-    accountPrice: async () => network === 'mainnet'
-      ? validateAccountPrice(await read('/market/supply', {reportError:false,timeoutMs:supplyTimeoutMs}), now()) : null,
+    accountPrice: async () => {
+      if (network !== 'mainnet') return null;
+      const path = '/market/supply';
+      const feed = await read(path, {reportError:false,timeoutMs:supplyTimeoutMs});
+      return stalePaths.has(path) ? validateStoredAccountPrice(feed, now()) : validateAccountPrice(feed, now());
+    },
     blocks: async () => {
       const response = await read('/v2/blocks?page=1&page_size=10');
       if (!Array.isArray(response.data)) throw new Error('Invalid blocks response');

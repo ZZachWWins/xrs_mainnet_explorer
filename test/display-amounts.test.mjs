@@ -26,7 +26,7 @@ test('built display never denominates token or other instruction quantities as n
 
 test('built native display rejects malformed, unsafe, missing and over-u64 amounts', () => {
   for (const amount of [undefined,null,'',-1,Number.MAX_SAFE_INTEGER+1,'1.2','-1','1e9','18446744073709551616']) {
-    assert.equal(scope.hs({tx_type:'native_transfer',amount,amount_xrs:123}), 'Unavailable');
+    assert.equal(scope.hs({tx_type:'native_transfer',amount,amount_xrs:123}), '—');
   }
   assert.equal(scope.XerisNativeAmount('0'), '0 XRS');
   assert.equal(scope.XerisNativeAmount(undefined), null);

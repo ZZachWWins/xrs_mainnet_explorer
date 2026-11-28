@@ -21,7 +21,7 @@ function fixture() {
   return {api,setClock:value=>{clock=value;},setMode:value=>{mode=value;},feed};
 }
 
-test('short transport outages keep exact circulation only through its original expiry',async()=>{
+test('short transport outages keep the last exact circulation visible after its original live window',async()=>{
   for(const mode of ['offline','busy']){
     const f=fixture(),first=await f.api.stats();
     assert.equal(first.circulating_supply,'200165828090408815');
@@ -30,8 +30,8 @@ test('short transport outages keep exact circulation only through its original e
     assert.equal(retained.circulating_supply,first.circulating_supply);
     assert.equal(retained.supply_observed_at,f.feed.observed_at);
     f.setClock(30_000);
-    assert.equal(retained.circulating_supply,undefined);
-    assert.equal((await f.api.stats()).circulating_supply,undefined);
+    assert.equal(retained.circulating_supply,first.circulating_supply);
+    const later=await f.api.stats();assert.equal(later.circulating_supply,first.circulating_supply);assert.equal(later.supply_stale,true);
   }
 });
 
@@ -44,11 +44,11 @@ test('wrong-chain or malformed supply immediately clears a still-valid previous 
   }
 });
 
-test('a new verified feed replaces the old observation without changing the old expiry',async()=>{
+test('a new verified feed replaces the old observation without mutating retained view data',async()=>{
   const f=fixture(),first=await f.api.stats();
   f.feed.supply.circulating_raw='200165838090408815';f.feed.expires_at_ms='40000';f.setClock(20_000);
   const next=await f.api.stats();assert.equal(next.circulating_supply,'200165838090408815');
   assert.equal(first.circulating_supply,'200165828090408815');
-  f.setClock(30_000);assert.equal(first.circulating_supply,undefined);
+  f.setClock(30_000);assert.equal(first.circulating_supply,'200165828090408815');
   assert.equal(next.circulating_supply,'200165838090408815');
 });

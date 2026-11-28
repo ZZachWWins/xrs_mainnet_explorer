@@ -86,7 +86,7 @@ test('built skip targets remain after navigation for every route and reachable d
 
 test('startup completion hands skip focus to content only while the loader still owns focus',async()=>{
   const source=await readFile(new URL('../src/bootstrap.mjs',import.meta.url),'utf8');
-  const start=source.indexOf('const finishStartup = () => {'),end=source.indexOf('let retryTimer;',start);assert.ok(start>=0&&end>start);
+  const start=source.indexOf('const finishStartup = () => {'),end=source.indexOf('let retryTimer,',start);assert.ok(start>=0&&end>start);
   const startup={hidden:false},skipLink={href:'#startup-loader'},root={setAttribute(name,value){assert.equal(name,'aria-busy');assert.equal(value,'false');}};
   let focused=0,active=startup;const content={focus(options){assert.deepEqual(options,{preventScroll:true});focused++;}};
   const document={get activeElement(){return active;},getElementById(id){assert.equal(id,'explorer-content');return content;}};

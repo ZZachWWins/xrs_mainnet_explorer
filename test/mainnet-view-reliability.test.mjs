@@ -59,7 +59,7 @@ test('Accounts retains the last valid rows while refresh is pending and after a 
   try{
     ui.render();let tree=await ui.settled();assert.match(text(tree),new RegExp(owner));
     refresh=deferred();button(tree,/refresh/i).props.onClick();tree=ui.render();assert.match(text(tree),new RegExp(owner));
-    refresh.reject(Error('temporary failure'));tree=await ui.settled();assert.match(text(tree),new RegExp(owner));assert.match(text(tree),/unavailable|could not|failed/i);
+    refresh.reject(Error('temporary failure'));tree=await ui.settled();assert.match(text(tree),new RegExp(owner));assert.match(text(tree),/Showing the latest saved account data/);
     assert.equal(nodes(tree,n=>n.type==='Link'&&n.props.to==='/account/'+owner).length,1);
   }finally{ui.dispose();}
 });
@@ -68,7 +68,7 @@ for(const [name,method,label,row] of [['iv','tokens','tokens',{token_id:'xrs_nat
   test(label+' use a named loading circle and recover through Retry',async()=>{
     let attempt=deferred(),calls=0;const ui=harness(name,{[method]:()=>{calls++;return attempt.promise;}});
     try{
-      loading(ui.render(),new RegExp('loading.*'+label,'i'));attempt.reject(Error('offline'));let tree=await ui.settled();assert.match(text(tree),/unavailable|could not|failed/i);
+      loading(ui.render(),new RegExp('loading.*'+label,'i'));attempt.reject(Error('offline'));let tree=await ui.settled();assert.match(text(tree),/updating|try again/i);
       attempt=deferred();button(tree,/retry/i).props.onClick();loading(ui.render(),new RegExp('loading.*'+label,'i'));attempt.resolve([row]);tree=await ui.settled();
       assert.equal(calls,2);assert.match(text(tree),new RegExp(row.token_id||row.contract_id));assert.doesNotMatch(text(tree),/unavailable|could not|failed/i);
     }finally{ui.dispose();}
@@ -123,12 +123,12 @@ test('swap detail preserves exact raw u64 reserves and a legitimate zero fee',as
 });
 
 for(const decimals of [null,0]){
-  test('pool price '+(decimals===null?'stays unavailable without token precision':'honors zero-decimal token metadata'),async()=>{
+  test('pool price '+(decimals===null?'uses a neutral placeholder without token precision':'honors zero-decimal token metadata'),async()=>{
     const ui=harness('pv',{pools:async()=>[{pool_id:'precision-pool',token_a:'A',token_b:'B',reserve_a:'1',reserve_b:'2',fee_bps:0,price_a_in_b:'2'}],
       tokens:async()=>decimals===null?[]:[{token_id:'A',decimals},{token_id:'B',decimals}]});
     try{
       ui.render();const tree=await ui.settled();const field=nodes(tree,n=>n.children?.length>=2&&n.children[0]?.type==='span'&&/^Price \(/.test(text(n.children[0]).trim()));assert.equal(field.length,1);
-      assert.equal(text(field[0].children[1]),decimals===null?'Unavailable':'2');
+      assert.equal(text(field[0].children[1]),decimals===null?'—':'2');
     }finally{ui.dispose();}
   });
 }
@@ -151,7 +151,7 @@ test('Accounts replaces wealth-ranking labels and defaults to oldest known activ
     ui.render();let tree=await ui.settled();
     assert.equal(text(nodes(tree,node=>node.type==='h1')[0]),'Accounts');assert.doesNotMatch(bundle,/Rich List|Top Holder/);
     assert.deepEqual(accountLinks(tree),[addresses[1],addresses[0],addresses[2],addresses[3]]);
-    assert.match(text(tree),/First-seen coverage is partial/);assert.match(text(tree),/200,165,828\.090408815/);
+    assert.match(text(tree),/First-recorded coverage is still expanding/);assert.match(text(tree),/200,165,828\.090408815/);
     assert.ok(usdCells(tree).includes('$2,001,658,280.90'));assert.ok(usdCells(tree).includes('$0.00'));
     assert.match(text(tree),/xUSDC valued at US\$1/);assert.match(text(tree),/Actual trade proceeds vary with fees and price impact/);
     for(const row of accountRows(tree))assert.equal(nodes(row,node=>node.props['data-label']==='Est. value (USD)').length,1);
@@ -164,21 +164,21 @@ test('optional age and price reads can remain pending or fail without removing n
   const ages=deferred(),price=deferred();const ui=harness('nv',{balances:async()=>({[owner]:'9007199254740993'}),accountAges:()=>ages.promise,accountPrice:()=>price.promise});
   try{
     ui.render();let tree=await ui.settled();assert.deepEqual(accountLinks(tree),[owner]);assert.match(text(tree),/9,007,199\.254740993/);
-    assert.deepEqual(usdCells(tree),['Loading…']);
-    assert.match(text(nodes(tree,node=>node.props['data-source']==='ages')[0]),/Loading first-seen history/);
+    assert.deepEqual(usdCells(tree),['—']);
+    assert.equal(nodes(tree,node=>node.props['data-source']==='ages').length,0);
     ages.reject(Error('history offline'));price.reject(Error('invalid quote'));tree=await ui.settled();
-    assert.deepEqual(accountLinks(tree),[owner]);assert.deepEqual(usdCells(tree),['Unavailable']);
-    assert.match(text(tree),/First-seen history is unavailable/);assert.match(text(tree),/Estimated USD values are unavailable/);
-    assert.doesNotMatch(text(tree),/Accounts data is unavailable/);
+    assert.deepEqual(accountLinks(tree),[owner]);assert.deepEqual(usdCells(tree),['—']);
+    assert.equal(nodes(tree,node=>node.props['data-source']==='ages'||node.props['data-source']==='price').length,0);
+    assert.doesNotMatch(text(tree),/unavailable|refreshing the pool|updating market values/i);
   }finally{ui.dispose();}
 });
 
-test('transient price failure retains only the originally valid quote and the one-second expiry removes its values',async()=>{
+test('transient price failure keeps the last verified values visible beyond the quote refresh window',async()=>{
   let failure=false;const ui=harness('nv',{balances:async()=>({[owner]:'1000000000'}),accountPrice:async()=>{if(failure)throw Object.assign(Error('temporary'),{retryable:true});return accountQuote;}});ui.setNow(10000);
   try{
     ui.render();let tree=await ui.settled();assert.deepEqual(usdCells(tree),['$10.00']);
-    failure=true;ui.timer(10000);tree=await ui.settled();assert.deepEqual(usdCells(tree),['$10.00']);assert.match(text(tree),/original expiry/);
-    ui.setNow(29000);ui.timer(1000);tree=ui.render();assert.deepEqual(usdCells(tree),['Unavailable']);assert.deepEqual(accountLinks(tree),[owner]);
+    failure=true;ui.timer(10000);tree=await ui.settled();assert.deepEqual(usdCells(tree),['$10.00']);assert.equal(nodes(tree,node=>node.props['data-source']==='price').length,0);
+    ui.setNow(29000);ui.timer(1000);tree=ui.render();assert.deepEqual(usdCells(tree),['$10.00']);assert.deepEqual(accountLinks(tree),[owner]);
   }finally{ui.dispose();}
 });
 
@@ -187,7 +187,7 @@ test('invalid or wrong-chain price failures clear the prior quote before its exp
     let invalid=false;const ui=harness('nv',{balances:async()=>({[owner]:'1000000000'}),accountPrice:async()=>{if(invalid)throw Object.assign(Error('invalid'),{code,retryable:false});return accountQuote;}});ui.setNow(10000);
     try{
       ui.render();assert.deepEqual(usdCells(await ui.settled()),['$10.00']);invalid=true;ui.timer(10000);
-      const tree=await ui.settled();assert.deepEqual(usdCells(tree),['Unavailable']);assert.deepEqual(accountLinks(tree),[owner]);
+      const tree=await ui.settled();assert.deepEqual(usdCells(tree),['—']);assert.deepEqual(accountLinks(tree),[owner]);assert.equal(nodes(tree,node=>node.props['data-source']==='price').length,0);
     }finally{ui.dispose();}
   }
 });
@@ -205,7 +205,7 @@ test('Testnet Accounts never requests or reuses Mainnet age and valuation metada
     accountAges:async()=>{optional++;throw Error('must not call');},accountPrice:async()=>{optional++;throw Error('must not call');}});
   try{
     ui.render();const tree=await ui.settled();assert.equal(optional,0);assert.equal(ui.timerCount(),0);assert.deepEqual(accountLinks(tree),[owner]);
-    assert.deepEqual(usdCells(tree),['Unavailable']);assert.match(text(tree),/unavailable on Testnet/);
+    assert.deepEqual(usdCells(tree),['—']);assert.equal(nodes(tree,node=>node.props['data-source']==='price').length,0);
   }finally{ui.dispose();}
 });
 

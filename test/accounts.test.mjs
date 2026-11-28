@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validateAccountAges,validateAccountPrice,accountUSD,sortAccounts,accountFirstSeen} from '../src/accounts.mjs';
+import {validateAccountAges,validateAccountPrice,validateStoredAccountPrice,accountUSD,sortAccounts,accountFirstSeen} from '../src/accounts.mjs';
 import {createExplorerAPI} from '../src/explorer-api.mjs';
 import {routeRequest} from '../src/proxy.mjs';
 const now=1795561609448;
@@ -18,13 +18,32 @@ test('USD estimates use exact raw balances and verified reserve ratio, including
   assert.equal(accountUSD(200165828090408815,quote,now),null);
   assert.equal(accountUSD('18446744073709551616',quote,now),null);
 });
-test('quotes expire without another network response and invalid prices never become zero',()=>{
+test('last verified quotes remain displayable while refresh waits and invalid prices never become zero',()=>{
   assert.deepEqual(validateAccountPrice(feed,now),quote);
+  assert.deepEqual(validateStoredAccountPrice(feed,now+86400000),{...quote,stale:true});
   assert.equal(accountUSD('198999000000',quote,now+19999),'$2.83');
-  assert.equal(accountUSD('198999000000',quote,now+20000),null);
+  assert.equal(accountUSD('198999000000',quote,now+20000),'$2.83');
+  assert.equal(accountUSD('198999000000',quote,now+86400000),'$2.83');
   for(const changed of [{chain_id:'testnet'},{expires_at_ms:String(now)},{expires_at_ms:String(now+20001)},{observed_at_ms:String(now+2001)},
     {market:{...feed.market,price_xrs_raw_denominator:'0'}},{market:{...feed.market,quote_token_id:'unverified'}},{market:{...feed.market,price_basis:'fixed'}}])
     assert.throws(()=>validateAccountPrice({...feed,...changed},now));
+});
+test('a verified cached feed restores the last market value across a transient reload outage',async()=>{
+  const values=new Map(),cacheStorage={getItem:key=>values.has(key)?values.get(key):null,setItem:(key,value)=>values.set(key,String(value)),removeItem:key=>values.delete(key)};
+  const headers={'x-xeris-network':'mainnet','x-xeris-chain-id':'xeris-mainnet-v4'};let offline=false;
+  const fetchImpl=async url=>{
+    if(offline)throw new TypeError('Synthetic outage');
+    if(url.endsWith('/identity/checkpoint'))return new Response(JSON.stringify({success:true,data:{slot:27201,hash:'0a401c139eef73f049010450d4aa13ef38636799784d01bbc0ecdb9c71facaf3'}}),{headers});
+    if(url.endsWith('/market/supply'))return new Response(JSON.stringify(feed),{headers});
+    throw new Error('Unexpected route');
+  };
+  const live=createExplorerAPI('mainnet',{cacheStorage,fetchImpl,now:()=>now});
+  assert.deepEqual(await live.accountPrice(),quote);
+  offline=true;
+  const retained=createExplorerAPI('mainnet',{cacheStorage,fetchImpl,now:()=>now+86400000});
+  const restored=await retained.accountPrice();
+  assert.deepEqual(restored,{...quote,stale:true});
+  assert.equal(accountUSD('198999000000',restored,now+86400000),'$2.83');
 });
 test('default order is oldest recorded activity regardless of balances; unknown age is last in both directions',()=>{
   const entries=[[b,'2000000000000'],['unknown','99999999999999999'],[a,'1']];

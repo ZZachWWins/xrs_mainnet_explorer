@@ -16,8 +16,9 @@ export function searchDestination(value, scope = 'auto', {history = false} = {})
   if (scope === 'block' && !blockHash && (!/^\d{1,16}$/.test(text) || BigInt(text) > BigInt(Number.MAX_SAFE_INTEGER))) throw new Error('Enter a valid numeric block slot.');
   if (scope === 'account' && (!BASE58.test(text) || text.length < 32 || text.length > 44)) throw new Error('Enter a valid Xeris wallet address.');
   if (scope === 'tx' && (!BASE58.test(text) || text.length < 85 || text.length > 88)) throw new Error('Enter a complete transaction signature.');
-  if (!['block', 'account', 'tx', 'token', 'contract'].includes(scope) || !PUBLIC_ID.test(text)) throw new Error('This identifier is not supported.');
+  if (!['block', 'account', 'tx', 'token', 'contract', 'pool'].includes(scope) || !PUBLIC_ID.test(text)) throw new Error('This identifier is not supported.');
   if (scope === 'block' && blockHash) return `/history/block/${text}`;
+  if (scope === 'pool') return `/contract/${encodeURIComponent(text)}`;
   return `/${scope}/${encodeURIComponent(scope === 'block' ? String(BigInt(text)) : text)}`;
 }
 
@@ -39,7 +40,7 @@ export function createNavigation(React, Link, useLocation, useNavigate, {network
     const location = useLocation(), navigate = useNavigate();
     const [open, setOpen] = React.useState(false), [query, setQuery] = React.useState(''),
       [scope, setScope] = React.useState('auto'), [error, setError] = React.useState('');
-    const menuButton = React.useRef(null), keyboardNavigation = React.useRef(false);
+    const menuButton = React.useRef(null), keyboardNavigation = React.useRef(false), searchInput = React.useRef(null);
     const section = activeSection(location.pathname);
     React.useEffect(() => {
       setOpen(false);setError('');
@@ -48,6 +49,15 @@ export function createNavigation(React, Link, useLocation, useNavigate, {network
         document.getElementById('explorer-content')?.focus({preventScroll:true});
       }
     }, [location.pathname]);
+    React.useEffect(()=>{
+      const target=globalThis.document;
+      if(!target?.addEventListener)return;
+      const focusSearch=event=>{
+        if(event.key!=='/'||event.metaKey||event.ctrlKey||event.altKey||event.target?.matches?.('input, textarea, select, [contenteditable=true]'))return;
+        event.preventDefault();searchInput.current?.focus();
+      };
+      target.addEventListener('keydown',focusSearch);return()=>target.removeEventListener('keydown',focusSearch);
+    },[]);
     function markNavigation(event, to) {
       keyboardNavigation.current = !event.defaultPrevented && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
         && event.button === 0 && event.detail === 0 && location.pathname !== to;
@@ -70,10 +80,10 @@ export function createNavigation(React, Link, useLocation, useNavigate, {network
           onClick:()=>setOpen(!open)},open?'Close menu':'Menu'),
         h('form',{className:'explorer-search',onSubmit:submit,role:'search'},
           h('select',{'aria-label':'Search type',value:scope,onChange:event=>{setScope(event.target.value);setError('');}},
-            ...[['auto','All'],['block','Block'],['account','Account'],['tx','Transaction'],['token','Token'],['contract','Contract']].map(([value,label])=>h('option',{key:value,value},label))),
-          h('input',{type:'search','aria-label':'Search the selected network',placeholder:'Search by slot, address or token ID',value:query,maxLength:128,
+            ...[['auto','All'],['block','Block'],['account','Account'],['tx','Transaction'],['token','Token'],['contract','Contract'],['pool','Pool']].map(([value,label])=>h('option',{key:value,value},label))),
+          h('input',{ref:searchInput,type:'search','aria-label':'Search the selected network',placeholder:'Search block, signature, address, token or contract',value:query,maxLength:128,
             onChange:event=>{setQuery(event.target.value);setError('');},'aria-invalid':Boolean(error),'aria-describedby':error?'explorer-search-error':undefined,autoComplete:'off',spellCheck:false}),
-          h('button',{type:'submit','aria-label':'Search'},'Search'))),
+          h('span',{className:'explorer-search-shortcut','aria-hidden':'true'},'/'),h('button',{type:'submit','aria-label':'Search'},'Search'))),
       error&&h('p',{id:'explorer-search-error',className:'explorer-search-error',role:'alert'},error),
       h('nav',{id:'explorer-navigation',className:`explorer-navigation${open?' is-open':''}`,'aria-label':'Explorer sections'},
         ...links.map(([to,label])=>h(Link,{key:to,to,onClick:event=>markNavigation(event,to),

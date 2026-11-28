@@ -9,8 +9,42 @@ import {searchDestination} from '../src/navigation.mjs';
 const generation='a'.repeat(64);
 const coverage={chain_id:'xeris-mainnet-v4',indexed_from:1,tip:{slot:47625,hash:'b'.repeat(64)},counts:{blocks:47625,transactions:16},gaps:[],block_shard_size:1000,list_page_size:100};
 const body=data=>({generation,coverage,data});
-const response=(data,status=200,network='mainnet')=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json','x-xeris-network':network,'x-xeris-chain-id':'xeris-mainnet-v4'}});
+const response=(data,status=200,network='mainnet',headers={})=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json','x-xeris-network':network,'x-xeris-chain-id':'xeris-mainnet-v4',...headers}});
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+const memoryStorage=()=>{const values=new Map();return{getItem:key=>values.has(key)?values.get(key):null,setItem:(key,value)=>values.set(key,String(value)),removeItem:key=>values.delete(key)}};
+
+test('verified history pages remain browsable across a transient reload outage',async()=>{
+  const cacheStorage=memoryStorage(),block={slot:47625,hash:'b'.repeat(64),transaction_count:0,transactions:[],proposer:'1'.repeat(32),poh_timestamp:1795545129854};
+  let offline=false,clock=1795561609448;const fetchImpl=async path=>{
+    if(offline)throw Error('Synthetic outage');
+    if(path.endsWith('/coverage'))return response(body(coverage));
+    if(path.endsWith('/blocks'))return response({...body([block]),snapshot_tip:coverage.tip,cursor:null});
+    throw Error('Unexpected route '+path);
+  };
+  const live=createHistoryClient('mainnet',{cacheStorage,fetchImpl,now:()=>clock});
+  assert.equal((await live.readiness()).ready,true);assert.equal((await live.page('blocks')).data[0].slot,47625);
+  offline=true;clock+=60_000;
+  const restored=createHistoryClient('mainnet',{cacheStorage,fetchImpl,now:()=>clock});
+  const gate=await restored.readiness(),page=await restored.page('blocks');
+  assert.equal(gate.ready,true);assert.equal(gate.coverage.stale,true);assert.equal(gate.coverage.snapshot_age_ms,60_000);
+  assert.equal(page.data[0].slot,47625);assert.equal(page.coverage.stale,true);
+});
+
+test('retained history pages honor Retry-After without blocking a different archive path',async()=>{
+  const cacheStorage=memoryStorage(),block={slot:47625,hash:'b'.repeat(64),transaction_count:0,transactions:[],proposer:'1'.repeat(32)};
+  let clock=10_000,busy=false,blockCalls=0,coverageCalls=0;
+  const fetchImpl=async path=>{
+    if(path.endsWith('/blocks')){blockCalls++;return busy?response({error:{code:'busy'}},503,'mainnet',{'retry-after':'20'}):response({...body([block]),snapshot_tip:coverage.tip,cursor:null});}
+    if(path.endsWith('/coverage')){coverageCalls++;return response(body(coverage));}
+    throw Error('Unexpected route '+path);
+  };
+  const client=createHistoryClient('mainnet',{cacheStorage,fetchImpl,now:()=>clock});
+  assert.equal((await client.page('blocks')).data[0].slot,47625);
+  busy=true;assert.equal((await client.page('blocks')).coverage.stale,true);assert.equal(blockCalls,2);
+  clock+=19_999;assert.equal((await client.page('blocks')).coverage.stale,true);assert.equal(blockCalls,2);
+  assert.equal((await client.readiness()).ready,true);assert.equal(coverageCalls,1);
+  clock+=1;busy=false;assert.equal((await client.page('blocks')).data[0].slot,47625);assert.equal(blockCalls,3);
+});
 
 test('unpublished manifest produces honest 503 and fixed Mainnet identity without writes',async()=>{
   let reads=0;const handle=createHistoryFunction({fetchImpl:async()=>{throw Error('offline fixture');},adapter:{async readCurrent(){reads++;return null;},async readGeneration(){throw Error('unexpected');},async readJSON(){throw Error('unexpected');}}});
@@ -86,7 +120,7 @@ test('ready view renders honest coverage, records, paging, and never stale recor
 });
 test('view fallback is explicit; Testnet returns its existing component without archive reads',async()=>{
   const Fallback=()=>null;let calls=0;const ui=viewHarness({network:'mainnet',readiness:async()=>{calls++;return{ready:false};}});
-  ui.render({kind:'transactions',Fallback});await tick();const tree=ui.render({kind:'transactions',Fallback});assert.match(textOf(tree),/Showing the live endpoint/);assert.ok(findNodes(tree,n=>n.type===Fallback).length);
+  ui.render({kind:'transactions',Fallback});await tick();const tree=ui.render({kind:'transactions',Fallback});assert.match(textOf(tree),/Recent network activity remains visible/);assert.ok(findNodes(tree,n=>n.type===Fallback).length);
   const testnet=viewHarness({network:'testnet',readiness:async()=>{throw Error('must not call');}});assert.equal(testnet.render({Fallback}).type,Fallback);assert.equal(calls,1);
 });
 test('unpublished Mainnet searches resolve built live fallbacks and preserve the account balance route',async()=>{
@@ -101,7 +135,7 @@ test('unpublished Mainnet searches resolve built live fallbacks and preserve the
     const path=searchDestination(input,scope,{history:true}),route=routes.find(v=>v.props.path===pattern);
     assert.equal(path.split('/')[1],pattern.split('/')[1]);assert.equal(route.props.element.type,'XerisHistoryRoute');assert.equal(route.props.element.props.Fallback,fallback);
     const ui=viewHarness(client,path),props=route.props.element.props;ui.render(props);await tick();await tick();
-    const tree=ui.render(props);assert.match(textOf(tree),/Showing the live endpoint/);assert.equal(findNodes(tree,n=>n.type===fallback).length,1);
+    const tree=ui.render(props);assert.match(textOf(tree),/Recent network activity remains visible/);assert.equal(findNodes(tree,n=>n.type===fallback).length,1);
   }
   assert.equal(manifestReads,2);
   const address='H'.repeat(44);assert.equal(searchDestination(address,'auto',{history:true}),'/account/'+address);
@@ -133,5 +167,5 @@ test('history page cache retains recent pages but evicts older data beyond 20 en
 test('history view labels source, stale snapshot age and pagination snapshot separately',async()=>{
   const client={network:'mainnet',readiness:async()=>({ready:true}),page:async()=>({...body([]),coverage:{...coverage,source:'blobs',stale:true,snapshot_age_ms:7_200_000},snapshot_tip:{slot:47600,hash:'c'.repeat(64)},cursor:null})};
   const ui=viewHarness(client);ui.render();await tick();await tick();const text=textOf(ui.render());
-  assert.match(text,/Source: verified stored snapshot\. 2 hours old/);assert.match(text,/Archive updates are delayed/);assert.match(text,/snapshot through block 47,600/);assert.match(text,/Indexed blocks 1–47,625/);
+  assert.match(text,/Source: verified stored snapshot\. 2 hours old/);assert.match(text,/records below remain visible while newer activity is added/i);assert.match(text,/snapshot through block 47,600/);assert.match(text,/Indexed blocks 1–47,625/);
 });

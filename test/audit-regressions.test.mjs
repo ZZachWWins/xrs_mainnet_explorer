@@ -60,7 +60,7 @@ test('pool failure is separate from an empty result and disposed responses canno
 });
 test('reported partial/failed/unknown outcomes cannot appear as a green success',()=>{
   assert.equal(transactionStatus('confirmed').color,'text-green-400');
-  assert.equal(transactionStatus('partial').label,'Partially executed');
+  assert.equal(transactionStatus('partial').label,'Partial');
   assert.equal(transactionStatus('failed').color,'text-red-400');
   for(const value of [undefined,null,'', 'unrecognized']) assert.equal(transactionStatus(value).color,'text-text-dim');
 });
@@ -71,7 +71,7 @@ test('built pool formatter preserves zero-decimal and raw balances without unsaf
   assert.equal(scope.Sc('123456789',0),'123,456,789');
   assert.equal(scope.Sc('18446744073709551615',9),'18,446,744,073.709551615');
   assert.equal(scope.Sc('1000000',undefined),'1,000,000 raw units');
-  assert.equal(scope.Sc(Number.MAX_SAFE_INTEGER+1,0),'Unavailable');
+  assert.equal(scope.Sc(Number.MAX_SAFE_INTEGER+1,0),'—');
   assert.equal(rawUnits('18446744073709551616'),'—');
 });
 test('built explorer presents the scoped security audit status on every route',()=>{

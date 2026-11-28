@@ -1,5 +1,37 @@
 // One connection attempt at a time. Transient failures back off without a reload;
 // identity/schema failures remain explicit and never enter an automatic loop.
+export function createFreshnessState() {
+  const stale = new Map();
+  const key = path => typeof path === 'string' && path.length ? path : '__global__';
+  const snapshot = fallbackObservedAtMs => {
+    let oldest;
+    for (const observedAtMs of stale.values()) {
+      if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= 0) continue;
+      oldest = oldest === undefined ? observedAtMs : Math.min(oldest, observedAtMs);
+    }
+    return Object.freeze({
+      state: stale.size ? 'stale' : 'live',
+      observedAtMs: stale.size ? oldest : fallbackObservedAtMs,
+      staleCount: stale.size,
+      stalePaths: Object.freeze([...stale.keys()]),
+    });
+  };
+  return Object.freeze({
+    update({state, path, observedAtMs} = {}) {
+      const route = key(path);
+      if (state === 'stale') stale.set(route, observedAtMs);
+      else if (state === 'live') stale.delete(route);
+      return snapshot(observedAtMs);
+    },
+    retain(paths = []) {
+      const keep = new Set(paths.map(key));
+      for (const path of stale.keys()) if (!keep.has(path)) stale.delete(path);
+      return snapshot();
+    },
+    snapshot,
+  });
+}
+
 export function createConnectionRecovery({connect, onConnecting, onConnected, onFailure,
   schedule = setTimeout, cancel = clearTimeout, now = Date.now} = {}) {
   let timer, running = false, stopped = false, connected = false, failures = 0, notBefore = 0;

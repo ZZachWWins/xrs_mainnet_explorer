@@ -17,7 +17,7 @@ export function validateAccountAges(value) {
   }
   return {data:value.data, basis:value.basis, truncated:value.truncated};
 }
-export function validateAccountPrice(feed, now = Date.now()) {
+function accountPrice(feed, now, allowExpired) {
   const market = feed?.market;
   if (feed?.schema_version !== '2' || feed.chain_id !== 'xeris-mainnet-v4' || feed.status !== 'ready' ||
       market?.token_id !== 'native_xrs' || market.decimals !== '9' || market.quote_token_id !== 'xeris_usdc' ||
@@ -29,17 +29,22 @@ export function validateAccountPrice(feed, now = Date.now()) {
       typeof feed.observed_at_ms !== 'string' || typeof feed.expires_at_ms !== 'string' ||
       !/^[0-9]{1,16}$/.test(feed.observed_at_ms) || !/^[0-9]{1,16}$/.test(feed.expires_at_ms) ||
       !integer(now) || BigInt(feed.observed_at_ms) > BigInt(now) + 2000n ||
-      BigInt(feed.expires_at_ms) <= BigInt(now) || BigInt(feed.expires_at_ms) <= BigInt(feed.observed_at_ms) ||
+      !allowExpired && BigInt(feed.expires_at_ms) <= BigInt(now) || BigInt(feed.expires_at_ms) <= BigInt(feed.observed_at_ms) ||
       BigInt(feed.expires_at_ms) - BigInt(feed.observed_at_ms) > 20000n) throw Error('Current XRS valuation unavailable');
   return Object.freeze({numerator:market.price_quote_raw_numerator,denominator:market.price_xrs_raw_denominator,
-    observedAtMs:feed.observed_at_ms,expiresAtMs:feed.expires_at_ms});
+    observedAtMs:feed.observed_at_ms,expiresAtMs:feed.expires_at_ms,...(allowExpired?{stale:true}:{})});
 }
+export function validateAccountPrice(feed, now = Date.now()) { return accountPrice(feed, now, false); }
+// Previously verified same-network values remain useful for browsing after the
+// live quote window. They are explicitly marked stale and never used to quote
+// or execute a trade.
+export function validateStoredAccountPrice(feed, now = Date.now()) { return accountPrice(feed, now, true); }
 export function accountUSD(raw, quote, now = Date.now()) {
   try {
     if (!quote || !RAW.test(String(raw)) || typeof raw === 'number' && !Number.isSafeInteger(raw) || BigInt(raw) > MAX ||
         !RAW.test(quote.numerator) || !RAW.test(quote.denominator) || BigInt(quote.denominator) <= 0n || BigInt(quote.numerator) <= 0n ||
         !/^[0-9]{1,16}$/.test(quote.expiresAtMs) || !/^[0-9]{1,16}$/.test(quote.observedAtMs) || !integer(now) ||
-        BigInt(now) >= BigInt(quote.expiresAtMs) || BigInt(now) + 2000n < BigInt(quote.observedAtMs)) return null;
+        BigInt(quote.expiresAtMs) <= BigInt(quote.observedAtMs) || BigInt(now) + 2000n < BigInt(quote.observedAtMs)) return null;
     const numerator = BigInt(raw) * BigInt(quote.numerator), denominator = BigInt(quote.denominator) * 10000n;
     if (numerator > 0n && numerator < denominator) return '<$0.01';
     const cents = (numerator + denominator / 2n) / denominator;

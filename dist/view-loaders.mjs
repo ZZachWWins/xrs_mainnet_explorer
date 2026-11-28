@@ -94,11 +94,12 @@ export function loadPoolsView(api, emit) {
 export function transactionStatus(status) {
   const states = {
     confirmed: {label: 'Confirmed', color: 'text-green-400'},
-    success: {label: 'Success reported', color: 'text-green-400'},
+    included: {label: 'Included', color: 'text-text-dim'},
+    success: {label: 'Success', color: 'text-green-400'},
     failed: {label: 'Failed', color: 'text-red-400'},
-    partial: {label: 'Partially executed', color: 'text-yellow-400'},
+    partial: {label: 'Partial', color: 'text-yellow-400'},
     pending: {label: 'Pending', color: 'text-yellow-400'},
     queued: {label: 'Queued', color: 'text-yellow-400'},
   };
-  return Object.hasOwn(states, status) ? states[status] : {label: 'Outcome unavailable', color: 'text-text-dim'};
+  return Object.hasOwn(states, status) ? states[status] : {label: 'Recorded', color: 'text-text-dim'};
 }

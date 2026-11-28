@@ -43,14 +43,14 @@ def build():
          '"aria-label":t?"Close navigation menu":"Open navigation menu","aria-expanded":t,className:"md:hidden text-text-dim hover:text-white p-1",onClick:()=>n(!t)'),
         ('value:(l==null?void 0:l.num_validators)||0', 'value:(l==null?void 0:l.num_validators)??"—"'),
         ('label:"Total Supply",value:l!=null&&l.total_supply?`${(l.total_supply/1e18).toFixed(1)}B`:"..."',
-         'label:"Total Staked",value:l!=null&&l.total_staked?window.XerisExplorerFormat(l.total_staked,9,0)+" XRS":"—"}),a.jsx(er,{icon:a.jsx(xc,{size:20}),label:"XRS Market Cap",value:l!=null&&l.market_cap_quote_raw?window.XerisExplorerUSD(l.market_cap_quote_raw,l.market_cap_quote_decimals):l?"Unavailable":"Loading…",color:"text-brand-vibrant"'),
+         'label:"Total Staked",value:l!=null&&l.total_staked?window.XerisExplorerFormat(l.total_staked,9,0)+" XRS":"—"}),a.jsx(er,{icon:a.jsx(xc,{size:20}),label:"XRS Market Cap",value:l!=null&&l.market_cap_quote_raw?window.XerisExplorerUSD(l.market_cap_quote_raw,l.market_cap_quote_decimals):"—",color:"text-brand-vibrant"'),
         ('children:"Success Rate"', 'children:"Recorded TXS"'),
         ('children:[h.toFixed(2),"%"]', 'children:(l==null?void 0:l.total_transactions)??"—"'),
         ('children:"Avg Fee"', 'children:"Accounts"'),
         ('children:[(c/1e9).toFixed(4)," XRS"]', 'children:(l==null?void 0:l.total_accounts)??"—"'),
         ('children:"STABLE"', 'children:"OBSERVED"'),
         ('label:"Circulating",value:l!=null&&l.circulating_supply?`${(l.circulating_supply/1e15).toFixed(1)}M`:"..."',
-         'label:window.XerisExplorerAPI.network==="testnet"?"Accounts":"Circulating",value:window.XerisExplorerAPI.network==="testnet"?((l==null?void 0:l.total_accounts)??"..."):l!=null&&l.circulating_supply?`${(l.circulating_supply/1e15).toFixed(1)}M`:l?"Unavailable":"..."'),
+         'label:window.XerisExplorerAPI.network==="testnet"?"Accounts":"Circulating",value:window.XerisExplorerAPI.network==="testnet"?((l==null?void 0:l.total_accounts)??"—"):l!=null&&l.circulating_supply?`${(l.circulating_supply/1e15).toFixed(1)}M`:"—"'),
         ('const C=setInterval(b,3e4)', 'const C=setInterval(b,window.XerisExplorerAPI.network==="mainnet"?10000:30000)'),
         ('children:"Full Ledger"', 'children:"Recent transactions"'),
         ('children:"Total Transactions"', 'children:"Indexed Transactions"'),
@@ -62,15 +62,15 @@ def build():
         ('a.jsx("td",{className:"py-4 text-right",children:a.jsxs("div",{className:"flex items-center justify-end gap-3 text-xs text-text-dim",children:[a.jsx("div",{className:"w-20 h-1 bg-brand-deep rounded-full overflow-hidden",children:a.jsx("div",{className:"h-full bg-brand-blue shadow-[0_0_8px_rgba(0,25,165,0.8)]",style:{width:`${Math.min(100,y/c*100*50)}%`}})}),(y/c*100).toFixed(4),"%"]})})', 'null'),
         ('Ur().then(g=>{const y=g==null?void 0:g.find(S=>S.token_id==="xrs_native"||S.id==="xrs_native");y&&u(parseInt(y.max_supply||y.supply))}).catch(console.error)', 'void 0'),
         ('children:l?l.toLocaleString(void 0,{maximumFractionDigits:0})+" XRS":"..."',
-         'children:e!=null&&e.circulating_supply?window.XerisExplorerFormat(e.circulating_supply,9,0)+" XRS":"Unavailable"'),
+         'children:e!=null&&e.circulating_supply?window.XerisExplorerFormat(e.circulating_supply,9,0)+" XRS":"—"'),
         ('children:e!=null&&e.total_supply?(e.total_supply/1e9).toLocaleString(void 0,{maximumFractionDigits:0})+" XRS":"..."',
-         'children:e!=null&&e.total_supply?window.XerisExplorerFormat(e.total_supply,9,0)+" XRS":"Unavailable"'),
+         'children:e!=null&&e.total_supply?window.XerisExplorerFormat(e.total_supply,9,0)+" XRS":"—"'),
         ('label:"Regional Nodes"', 'label:"Listed Validators"'),
         ('label:"L1 Consensus",value:"Hardware-Secured"', 'label:"View",value:"Read-only explorer"'),
-        ('value:`${(e==null?void 0:e.avg_block_time_ms)||400}ms`', 'value:e!=null&&e.avg_block_time_ms?`${e.avg_block_time_ms}ms`:"Unavailable"'),
+        ('value:`${(e==null?void 0:e.avg_block_time_ms)||400}ms`', 'value:e!=null&&e.avg_block_time_ms?`${e.avg_block_time_ms}ms`:"—"'),
         ('label:"Network Load",value:"Optimal"', 'label:"Data",value:"Selected network"'),
         ('children:"Global Triple Consensus Nodes"', 'children:"Validator identities reported by the selected network"'),
-        ('children:w(t.max_supply||t.supply)', 'children:t.current_supply!=null?window.XerisExplorerFormat(t.current_supply,x,x):"Unavailable"'),
+        ('children:w(t.max_supply||t.supply)', 'children:t.current_supply!=null?window.XerisExplorerFormat(t.current_supply,x,x):"—"'),
         ('a.jsx(fv,{contract:t,tokenA:((Y=t.params)==null?void 0:Y.token_a)||((Z=t.state)==null?void 0:Z.token_a),tokenB:((Re=t.params)==null?void 0:Re.token_b)||((Ke=t.state)==null?void 0:Ke.token_b)})',
          'a.jsx("p",{className:"text-text-dim text-sm mt-4",children:"Pool reserves are reported in raw token units. This explorer is read-only."})'),
     ]
@@ -90,9 +90,9 @@ def build():
     token_changes = [
         ('function cv(){const{id:e}', 'function cv(){const[holdersStatus,setHoldersStatus]=v.useState("loading");const{id:e}'),
         ('v.useEffect(()=>{(async()=>{try{const[d,f]=await Promise.all([lg(e),sg(e)]);n(d),l(f||[]),o(!1)}catch(d){console.error(d),c("Failed to fetch token details"),o(!1)}})()},[e])',
-         'v.useEffect(()=>{let alive=true;o(true);c(null);l([]);setHoldersStatus("loading");lg(e).then(d=>{if(!alive)return;n(d);o(false);sg(e).then(f=>{if(alive){l(f||[]);setHoldersStatus("ready")}}).catch(()=>{if(alive)setHoldersStatus("unavailable")})}).catch(()=>{if(alive){c("Failed to fetch token details");o(false)}});return()=>{alive=false}},[e])'),
-        ('children:r.length.toLocaleString()', 'children:holdersStatus==="ready"?r.length.toLocaleString():holdersStatus==="loading"?"Loading…":"Unavailable"'),
-        ('children:"No holders found"', 'children:holdersStatus==="loading"?"Loading holders…":holdersStatus==="unavailable"?"Holder data unavailable":"No holders found"'),
+         'v.useEffect(()=>{let alive=true;o(true);c(null);l([]);setHoldersStatus("loading");lg(e).then(d=>{if(!alive)return;n(d);o(false);sg(e).then(f=>{if(alive){l(f||[]);setHoldersStatus("ready")}}).catch(()=>{if(alive)setHoldersStatus("unavailable")})}).catch(()=>{if(alive){c("Token details are updating. Try again shortly.");o(false)}});return()=>{alive=false}},[e])'),
+        ('children:r.length.toLocaleString()', 'children:holdersStatus==="ready"?r.length.toLocaleString():"—"'),
+        ('children:"No holders found"', 'children:holdersStatus==="loading"?"Loading holders…":holdersStatus==="unavailable"?"Holder records are updating":"No holders found"'),
     ]
     for before, after in token_changes:
         if token_ui.count(before) != 1:
@@ -134,11 +134,11 @@ def build():
 <link rel="stylesheet" href="/assets/explorer-ui.css"><link rel="stylesheet" href="/explorer.css"><script type="module" src="/bootstrap.mjs"></script>
 </head><body class="bg-brand-navy text-text-body antialiased">
 <a id="skip-to-content" class="skip-to-content" href="#startup-loader">Skip to explorer content</a>
-<header class="network-bar"><div class="network-identification"><strong>XERIS NETWORK EXPLORER</strong><span id="network-status" role="status">Verifying network…</span><span id="network-freshness">Session --:--:--</span></div>
+<header class="network-bar"><div class="network-identification"><strong>XERIS NETWORK EXPLORER</strong><span id="network-status" role="status">Connecting…</span><span id="network-freshness">Session --:--:--</span></div>
 <div class="network-audit" aria-label="Security audit status"><strong>SECURITY AUDITED</strong><span>Built on the CertiK-audited Xeris L1 core.</span></div>
 <div class="network-choice" id="network-selector" role="group" aria-label="Explorer network"><button type="button" data-network="testnet" aria-pressed="@TESTNET@">Testnet</button><button type="button" data-network="mainnet" aria-pressed="@MAINNET@">Mainnet Beta</button></div></header>
 <div class="data-notice" id="data-notice" role="status" hidden></div>
-<main class="startup-loader" id="startup-loader" tabindex="-1" role="status" aria-live="polite"><span class="loading-ring" aria-hidden="true"></span><h1 id="loading-title">Loading the explorer…</h1><p id="loading-detail">Connecting to the selected Xeris network.</p><p class="loading-patience">This may take a moment…</p></main>
+<main class="startup-loader" id="startup-loader" tabindex="-1" role="status" aria-live="polite"><span class="loading-ring" aria-hidden="true"></span><h1 id="loading-title">Loading the explorer…</h1><p id="loading-detail">Preparing the latest verified data.</p><p class="loading-patience">This may take a moment…</p></main>
 <div id="root" aria-busy="true"></div>
 <noscript><style>.startup-loader{display:none}</style>This explorer needs JavaScript to verify and display the selected network.</noscript></body></html>'''.replace('@TESTNET@', str(default_network == 'testnet').lower()).replace('@MAINNET@', str(default_network == 'mainnet').lower()))
     manifest = {'format': 1, 'recovered_ui': True, 'default_network': default_network,
